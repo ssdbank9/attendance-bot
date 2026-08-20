@@ -1,0 +1,721 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
+<meta name="theme-color" content="#1565c0">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<title>Attendance Bot</title>
+<style>
+:root{--bg:#fff;--bg2:#f5f6fa;--bg3:#eef1f6;--text:#1a1a2e;--text2:#666;--primary:#1565c0;--primary-light:#e3f2fd;--green:#27ae60;--orange:#e67e22;--red:#e74c3c;--border:#e0e0e0;--shadow:0 1px 4px rgba(0,0,0,.08);--radius:12px}
+@media(prefers-color-scheme:dark){:root:not([data-theme="light"]){--bg:#0f0f1a;--bg2:#1a1a2e;--bg3:#252540;--text:#e8e8f0;--text2:#999;--primary:#4da6ff;--primary-light:#1a2a40;--border:#333;--shadow:0 1px 4px rgba(0,0,0,.3)}}
+:root[data-theme="dark"]{--bg:#0f0f1a;--bg2:#1a1a2e;--bg3:#252540;--text:#e8e8f0;--text2:#999;--primary:#4da6ff;--primary-light:#1a2a40;--border:#333;--shadow:0 1px 4px rgba(0,0,0,.3)}
+*{margin:0;padding:0;box-sizing:border-box}
+body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;background:var(--bg);color:var(--text);min-height:100vh;-webkit-tap-highlight-color:transparent;padding-bottom:70px}
+.setup{display:flex;flex-direction:column;align-items:center;justify-content:center;min-height:100vh;padding:1.5rem;text-align:center}
+.setup h1{font-size:1.5rem;margin-bottom:.3rem}
+.setup p{color:var(--text2);font-size:.85rem;margin-bottom:1.5rem}
+.setup .logo{font-size:3rem;margin-bottom:1rem}
+.setup-form{width:100%;max-width:360px}
+.input{width:100%;padding:.7rem .9rem;border:1.5px solid var(--border);border-radius:8px;font-size:.9rem;background:var(--bg2);color:var(--text);outline:none;margin-bottom:.7rem}
+.input:focus{border-color:var(--primary)}
+.btn{display:block;width:100%;padding:.75rem;border:none;border-radius:8px;font-size:.95rem;font-weight:600;cursor:pointer;transition:opacity .2s}
+.btn-primary{background:var(--primary);color:#fff}
+.btn-outline{background:transparent;border:1.5px solid var(--border);color:var(--text)}
+.btn:active{opacity:.7}
+.btn-sm{display:inline-block;width:auto;padding:.35rem .7rem;font-size:.75rem;border-radius:6px}
+.btn-danger{background:var(--red);color:#fff}
+header{position:sticky;top:0;z-index:100;background:var(--bg);border-bottom:1px solid var(--border);padding:.7rem 1rem;display:flex;align-items:center;justify-content:space-between}
+header h1{font-size:1.1rem;font-weight:700}
+.sync-dot{width:8px;height:8px;border-radius:50%;display:inline-block;margin-right:4px}
+.sync-ok{background:var(--green)}.sync-err{background:var(--red)}.sync-loading{background:var(--orange);animation:pulse 1s infinite}
+@keyframes pulse{0%,100%{opacity:1}50%{opacity:.4}}
+.sync-bar{display:flex;align-items:center;gap:4px;font-size:.7rem;color:var(--text2);cursor:pointer}
+nav{display:flex;gap:0;border-bottom:1px solid var(--border);background:var(--bg);position:sticky;top:46px;z-index:99;overflow-x:auto}
+nav button{flex:1;padding:.6rem .3rem;border:none;background:transparent;color:var(--text2);font-size:.75rem;font-weight:600;cursor:pointer;border-bottom:2.5px solid transparent;white-space:nowrap}
+nav button.active{color:var(--primary);border-bottom-color:var(--primary)}
+.tab{display:none;padding:1rem}.tab.active{display:block}
+.card{background:var(--bg2);border-radius:var(--radius);padding:.9rem;margin-bottom:.8rem;box-shadow:var(--shadow)}
+.card-title{font-size:.8rem;font-weight:700;margin-bottom:.6rem;text-transform:uppercase;letter-spacing:.03em;color:var(--text2)}
+.status-grid{display:grid;grid-template-columns:1fr 1fr;gap:.6rem}
+.status-item{text-align:center;padding:.5rem;background:var(--bg3);border-radius:8px}
+.status-label{font-size:.65rem;color:var(--text2);margin-bottom:.2rem}
+.status-value{font-size:1rem;font-weight:700}
+.status-sub{font-size:.6rem;color:var(--text2);margin-top:.15rem}
+.lb-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:.5rem}
+.lb-item{text-align:center;padding:.5rem;background:var(--bg3);border-radius:8px}
+.lb-type{font-size:.65rem;color:var(--text2);margin-bottom:.15rem}
+.lb-num{font-size:1.15rem;font-weight:700}
+.lb-bar{height:4px;background:var(--bg);border-radius:2px;margin-top:.3rem;overflow:hidden}
+.lb-fill{height:100%;border-radius:2px;transition:width .3s}
+.wd-row{display:flex;align-items:center;padding:.5rem 0;border-bottom:1px solid var(--border)}
+.wd-row:last-child{border:none}
+.wd-day{width:2.2rem;font-size:.75rem;font-weight:600;color:var(--text2)}
+.wd-date{flex:1;font-size:.85rem}
+.badge{display:inline-block;padding:.15rem .45rem;border-radius:5px;font-size:.65rem;font-weight:600}
+.badge-ok{background:var(--green);color:#fff}
+.badge-skip{background:var(--orange);color:#fff}
+.badge-off{background:var(--text2);color:#fff;opacity:.6}
+.badge-leave{background:var(--primary);color:#fff}
+.skip-item{display:flex;justify-content:space-between;align-items:center;padding:.5rem 0;border-bottom:1px solid var(--border)}
+.skip-item:last-child{border:none}
+.skip-info{font-size:.85rem}.skip-date{font-size:.7rem;color:var(--text2)}
+.hol-item{padding:.45rem 0;border-bottom:1px solid var(--border);font-size:.85rem}
+.hol-item:last-child{border:none}
+.hol-date{font-size:.7rem;color:var(--text2)}
+.analytics-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:.5rem;margin-bottom:.8rem}
+.analytics-item{text-align:center;padding:.6rem;background:var(--bg3);border-radius:8px}
+.analytics-num{font-size:1.3rem;font-weight:700}.analytics-label{font-size:.6rem;color:var(--text2)}
+.analytics-used{font-size:.7rem;color:var(--text2);margin-top:.1rem}
+.history-item{padding:.4rem 0;border-bottom:1px solid var(--border);font-size:.8rem}
+.history-item:last-child{border:none}
+.form-group{margin-bottom:.7rem}
+.form-group label{display:block;font-size:.75rem;font-weight:600;margin-bottom:.3rem;color:var(--text2)}
+.form-row{display:grid;grid-template-columns:1fr 1fr;gap:.5rem}
+.modal{position:fixed;inset:0;background:rgba(0,0,0,.5);display:flex;align-items:flex-end;z-index:200}
+.modal-box{background:var(--bg);width:100%;max-width:480px;margin:0 auto;border-radius:16px 16px 0 0;padding:1.2rem;animation:slideUp .25s ease}
+@keyframes slideUp{from{transform:translateY(100%)}to{transform:translateY(0)}}
+.modal-title{font-size:1rem;font-weight:700;margin-bottom:.3rem}
+.modal-date{font-size:.8rem;color:var(--text2);margin-bottom:1rem}
+.modal-actions{display:flex;gap:.6rem;margin-top:1rem}
+.modal-actions .btn{flex:1}
+select.input{appearance:none;background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 12 12'%3E%3Cpath fill='%23666' d='M6 8L1 3h10z'/%3E%3C/svg%3E");background-repeat:no-repeat;background-position:right .7rem center}
+.checkbox-row{display:flex;align-items:center;gap:.5rem;font-size:.85rem;margin:.5rem 0}
+.checkbox-row input{width:18px;height:18px}
+.toast{position:fixed;bottom:80px;left:50%;transform:translateX(-50%);padding:.6rem 1.2rem;border-radius:8px;font-size:.85rem;font-weight:500;z-index:300;animation:fadeIn .3s}
+.toast-ok{background:var(--green);color:#fff}.toast-error{background:var(--red);color:#fff}
+@keyframes fadeIn{from{opacity:0;transform:translateX(-50%) translateY(10px)}to{opacity:1;transform:translateX(-50%) translateY(0)}}
+.empty{color:var(--text2);font-size:.8rem;font-style:italic;padding:.5rem 0}
+.loading{text-align:center;padding:2rem;color:var(--text2)}
+.loading::after{content:'';display:block;width:24px;height:24px;border:3px solid var(--border);border-top-color:var(--primary);border-radius:50%;animation:spin .8s linear infinite;margin:.8rem auto 0}
+@keyframes spin{to{transform:rotate(360deg)}}
+.mark-leave-btn{position:fixed;bottom:70px;right:1rem;width:52px;height:52px;border-radius:50%;background:var(--primary);color:#fff;border:none;font-size:1.5rem;box-shadow:0 2px 8px rgba(0,0,0,.2);cursor:pointer;z-index:50;display:flex;align-items:center;justify-content:center}
+.mark-leave-btn:active{transform:scale(.92)}
+</style>
+</head>
+<body>
+<!-- Setup Screen -->
+<div id="setup-screen" class="setup" style="display:none">
+  <div class="logo">&#128197;</div>
+  <h1>Attendance Bot</h1>
+  <p>Connect to your GitHub repo to manage attendance from your phone</p>
+  <div class="setup-form">
+    <input class="input" id="s-token" type="password" placeholder="GitHub Personal Access Token">
+    <input class="input" id="s-repo" type="text" placeholder="owner/repo" value="ssdbank9/attendance-bot">
+    <button class="btn btn-primary" onclick="testConnection()" id="s-btn">Connect &amp; Sync</button>
+    <p id="s-msg" style="margin-top:.7rem;font-size:.8rem"></p>
+    <details style="margin-top:1.2rem;text-align:left;font-size:.75rem;color:var(--text2)">
+      <summary style="cursor:pointer;font-weight:600">How to get a token</summary>
+      <ol style="padding-left:1.2rem;margin-top:.4rem;line-height:1.6">
+        <li>Go to github.com &rarr; Settings &rarr; Developer settings</li>
+        <li>Personal access tokens &rarr; Tokens (classic)</li>
+        <li>Generate new token (classic)</li>
+        <li>Select scope: <strong>repo</strong> (full control)</li>
+        <li>Copy the token and paste above</li>
+      </ol>
+    </details>
+  </div>
+</div>
+
+<!-- Loading Screen -->
+<div id="loading-screen" class="setup">
+  <div class="loading">Loading attendance data...</div>
+</div>
+
+<!-- Main App -->
+<div id="app" style="display:none">
+  <header>
+    <h1>Attendance</h1>
+    <div class="sync-bar" onclick="syncData()">
+      <span class="sync-dot sync-ok" id="sync-dot"></span>
+      <span id="sync-label">Synced</span>
+    </div>
+  </header>
+  <nav>
+    <button class="active" onclick="showTab('home',this)">Home</button>
+    <button onclick="showTab('leave',this)">Leave</button>
+    <button onclick="showTab('analytics',this)">Analytics</button>
+    <button onclick="showTab('settings',this)">Settings</button>
+  </nav>
+
+  <!-- Home Tab -->
+  <div id="tab-home" class="tab active">
+    <div class="card">
+      <div class="card-title">Today's Status</div>
+      <div id="status-content" class="status-grid"></div>
+    </div>
+    <div class="card">
+      <div class="card-title">Leave Balance (<span id="lb-year">2026</span>)</div>
+      <div id="balance-content" class="lb-grid"></div>
+    </div>
+    <div class="card">
+      <div class="card-title">Next 7 Days</div>
+      <div id="forecast-content"></div>
+    </div>
+  </div>
+
+  <!-- Leave Tab -->
+  <div id="tab-leave" class="tab">
+    <div class="card">
+      <div class="card-title">Active Leaves &amp; Skips</div>
+      <div id="skips-content"></div>
+    </div>
+    <div class="card">
+      <div class="card-title">Upcoming Holidays</div>
+      <div id="holidays-content"></div>
+    </div>
+    <div class="card">
+      <div class="card-title">Quick Skip</div>
+      <div class="form-group">
+        <label>Date</label>
+        <input class="input" type="date" id="skip-date">
+      </div>
+      <div class="form-group">
+        <label>Reason</label>
+        <input class="input" type="text" id="skip-reason" placeholder="e.g. Doctor appointment">
+      </div>
+      <button class="btn btn-outline" onclick="addSkip()">Add Skip</button>
+    </div>
+  </div>
+
+  <!-- Analytics Tab -->
+  <div id="tab-analytics" class="tab">
+    <div class="card">
+      <div class="card-title">Leave Summary</div>
+      <div id="analytics-summary" class="analytics-grid"></div>
+    </div>
+    <div class="card">
+      <div class="card-title">Leave History</div>
+      <div id="analytics-history"></div>
+    </div>
+  </div>
+
+  <!-- Settings Tab -->
+  <div id="tab-settings" class="tab">
+    <div class="card">
+      <div class="card-title">Connection</div>
+      <div style="font-size:.8rem;margin-bottom:.5rem">
+        <strong>Repo:</strong> <span id="set-repo"></span><br>
+        <strong>Token:</strong> <span id="set-token-mask"></span>
+      </div>
+      <div style="display:flex;gap:.5rem">
+        <button class="btn btn-outline btn-sm" onclick="syncData()">Sync Now</button>
+        <button class="btn btn-sm btn-danger" onclick="disconnect()">Disconnect</button>
+      </div>
+    </div>
+    <div class="card">
+      <div class="card-title">Leave Balance</div>
+      <div class="form-group">
+        <label>Year</label>
+        <input class="input" type="number" id="set-year" style="width:5rem">
+      </div>
+      <div class="form-row" style="margin-bottom:.5rem">
+        <div>
+          <div class="form-group"><label>Casual Annual</label><input class="input" type="number" step="0.5" id="set-ca"></div>
+          <div class="form-group"><label>Casual Remaining</label><input class="input" type="number" step="0.5" id="set-cr"></div>
+        </div>
+        <div>
+          <div class="form-group"><label>Sick Annual</label><input class="input" type="number" step="0.5" id="set-sa"></div>
+          <div class="form-group"><label>Sick Remaining</label><input class="input" type="number" step="0.5" id="set-sr"></div>
+        </div>
+      </div>
+      <div class="form-row" style="margin-bottom:.5rem">
+        <div>
+          <div class="form-group"><label>Earned Annual</label><input class="input" type="number" step="0.5" id="set-ea"></div>
+          <div class="form-group"><label>Earned Remaining</label><input class="input" type="number" step="0.5" id="set-er"></div>
+        </div>
+        <div>
+          <div class="form-group"><label>Carry Fwd Limit</label><input class="input" type="number" id="set-cfl"></div>
+          <div class="form-group"><label>Carried Forward</label><input class="input" type="number" step="0.5" id="set-cf"></div>
+        </div>
+      </div>
+      <button class="btn btn-primary" onclick="saveBalance()">Save Leave Balance</button>
+    </div>
+    <div class="card">
+      <div class="card-title">About</div>
+      <p style="font-size:.8rem;color:var(--text2)">Attendance Bot Mobile Dashboard. Syncs with your desktop bot via GitHub. Changes here are reflected on all devices.</p>
+      <p style="font-size:.7rem;color:var(--text2);margin-top:.4rem">Data stored locally + GitHub &bull; No server required</p>
+    </div>
+  </div>
+
+  <!-- FAB: Mark Leave -->
+  <button class="mark-leave-btn" onclick="openLeaveModal()" title="Mark Leave">+</button>
+</div>
+
+<!-- Leave Modal -->
+<div id="leave-modal" class="modal" style="display:none" onclick="if(event.target===this)closeLeaveModal()">
+  <div class="modal-box">
+    <div class="modal-title">Mark Leave</div>
+    <div class="modal-date" id="lm-date-label"></div>
+    <div class="form-group">
+      <label>Date</label>
+      <input class="input" type="date" id="lm-date">
+    </div>
+    <div class="form-group">
+      <label>Leave Type</label>
+      <select class="input" id="lm-type" onchange="toggleLmHalf()">
+        <option value="casual">Casual Leave</option>
+        <option value="sick">Sick Leave</option>
+        <option value="earned">Earned Leave</option>
+        <option value="other">Other</option>
+      </select>
+    </div>
+    <div class="checkbox-row" id="lm-half-row">
+      <input type="checkbox" id="lm-half">
+      <label for="lm-half">Half Day (0.5)</label>
+    </div>
+    <div class="modal-actions">
+      <button class="btn btn-outline" onclick="closeLeaveModal()">Cancel</button>
+      <button class="btn btn-primary" onclick="confirmLeave()">Confirm</button>
+    </div>
+  </div>
+</div>
+<script>
+// ===== GitHub API =====
+const GH = {
+  token: null, repo: null,
+  headers() {
+    return {'Authorization':'token '+this.token,'Accept':'application/vnd.github.v3+json','Content-Type':'application/json'};
+  },
+  async readFile(path) {
+    try {
+      const r = await fetch('https://api.github.com/repos/'+this.repo+'/contents/'+path, {headers:this.headers()});
+      if (r.status===404) return {content:null,sha:null};
+      if (!r.ok) throw new Error('HTTP '+r.status);
+      const d = await r.json();
+      const content = JSON.parse(atob(d.content.replace(/\n/g,'')));
+      return {content,sha:d.sha};
+    } catch(e) { console.error('Read '+path+':',e); return {content:null,sha:null}; }
+  },
+  async writeFile(path, content, sha, msg) {
+    try {
+      const body = {message:msg||'Update from mobile',content:btoa(unescape(encodeURIComponent(JSON.stringify(content,null,2))))};
+      if (sha) body.sha = sha;
+      const r = await fetch('https://api.github.com/repos/'+this.repo+'/contents/'+path, {method:'PUT',headers:this.headers(),body:JSON.stringify(body)});
+      if (!r.ok) { const e = await r.json(); throw new Error(e.message||'HTTP '+r.status); }
+      const d = await r.json();
+      return {ok:true, sha:d.content.sha};
+    } catch(e) { console.error('Write '+path+':',e); return {ok:false,error:e.message}; }
+  }
+};
+
+// ===== App State =====
+let S = {blackout:{},holidays:{},balance:{},status:{},shas:{}};
+const CACHE_KEY = 'att_cache';
+const today = () => new Date().toISOString().slice(0,10);
+const fmt = v => v===Math.floor(v)?Math.floor(v):v;
+
+// ===== Init =====
+async function init() {
+  GH.token = localStorage.getItem('gh_token');
+  GH.repo = localStorage.getItem('gh_repo');
+  if (!GH.token || !GH.repo) { showSetup(); return; }
+  // Show cached data while loading
+  const cached = localStorage.getItem(CACHE_KEY);
+  if (cached) { try { S = JSON.parse(cached); } catch(e){} }
+  document.getElementById('loading-screen').style.display = cached?'none':'';
+  document.getElementById('app').style.display = cached?'':'none';
+  if (cached) renderAll();
+  await syncData();
+  document.getElementById('loading-screen').style.display = 'none';
+  document.getElementById('app').style.display = '';
+}
+
+function showSetup() {
+  document.getElementById('setup-screen').style.display = '';
+  document.getElementById('loading-screen').style.display = 'none';
+  document.getElementById('app').style.display = 'none';
+}
+
+async function testConnection() {
+  const btn = document.getElementById('s-btn');
+  const msg = document.getElementById('s-msg');
+  const token = document.getElementById('s-token').value.trim();
+  const repo = document.getElementById('s-repo').value.trim();
+  if (!token||!repo) { msg.textContent='Please fill both fields'; msg.style.color='var(--red)'; return; }
+  btn.textContent = 'Connecting...'; btn.disabled = true;
+  GH.token = token; GH.repo = repo;
+  try {
+    const r = await fetch('https://api.github.com/repos/'+repo, {headers:GH.headers()});
+    if (!r.ok) throw new Error('Cannot access repo (HTTP '+r.status+')');
+    localStorage.setItem('gh_token', token);
+    localStorage.setItem('gh_repo', repo);
+    msg.textContent = 'Connected! Loading data...';
+    msg.style.color = 'var(--green)';
+    await syncData();
+    document.getElementById('setup-screen').style.display = 'none';
+    document.getElementById('app').style.display = '';
+    renderAll();
+  } catch(e) {
+    msg.textContent = e.message; msg.style.color = 'var(--red)';
+  }
+  btn.textContent = 'Connect & Sync'; btn.disabled = false;
+}
+
+function disconnect() {
+  if (!confirm('Disconnect from GitHub? Local cache will be cleared.')) return;
+  localStorage.removeItem('gh_token'); localStorage.removeItem('gh_repo'); localStorage.removeItem(CACHE_KEY);
+  showSetup();
+}
+
+// ===== Sync =====
+async function syncData() {
+  setSyncStatus('loading','Syncing...');
+  try {
+    const [bl,hol,bal,st] = await Promise.all([
+      GH.readFile('blackout.json'),
+      GH.readFile('holidays.json'),
+      GH.readFile('leave_balance.json'),
+      GH.readFile('timein_status.json'),
+    ]);
+    if (bl.content) { S.blackout = bl.content; S.shas.blackout = bl.sha; }
+    if (hol.content) { S.holidays = hol.content; S.shas.holidays = hol.sha; }
+    if (bal.content) { S.balance = bal.content; S.shas.balance = bal.sha; }
+    if (st.content) { S.status = st.content; S.shas.status = st.sha; }
+    localStorage.setItem(CACHE_KEY, JSON.stringify(S));
+    setSyncStatus('ok','Synced');
+    renderAll();
+  } catch(e) {
+    setSyncStatus('err','Sync failed');
+    console.error(e);
+  }
+}
+
+function setSyncStatus(type, label) {
+  const dot = document.getElementById('sync-dot');
+  const lbl = document.getElementById('sync-label');
+  dot.className = 'sync-dot sync-'+type;
+  lbl.textContent = label;
+}
+
+// ===== Tab Navigation =====
+function showTab(id, btn) {
+  document.querySelectorAll('.tab').forEach(t=>t.classList.remove('active'));
+  document.querySelectorAll('nav button').forEach(b=>b.classList.remove('active'));
+  document.getElementById('tab-'+id).classList.add('active');
+  if (btn) btn.classList.add('active');
+}
+
+// ===== Rendering =====
+function renderAll() {
+  renderStatus();
+  renderBalance();
+  renderForecast();
+  renderSkips();
+  renderHolidays();
+  renderAnalytics();
+  renderSettings();
+}
+
+function renderStatus() {
+  const el = document.getElementById('status-content');
+  const st = S.status||{};
+  const ti = st.timein||{};
+  const to = st.timeout||{};
+  const tiTime = ti.action_time||st.timein_time||'--';
+  const tiDate = ti.date||st.date||'--';
+  const toTime = to.action_time||'Pending';
+  const toDate = to.date||'';
+  el.innerHTML = '<div class="status-item"><div class="status-label">Time-In</div><div class="status-value">'+tiTime+'</div><div class="status-sub">'+tiDate+'</div></div>'
+    +'<div class="status-item"><div class="status-label">Time-Out</div><div class="status-value">'+toTime+'</div><div class="status-sub">'+toDate+'</div></div>';
+}
+
+function renderBalance() {
+  const el = document.getElementById('balance-content');
+  const lb = S.balance||{};
+  document.getElementById('lb-year').textContent = lb.year||2026;
+  const types = [['casual','Casual','--green'],['sick','Sick','--green'],['earned','Earned','--green']];
+  let h = '';
+  types.forEach(function(t){
+    const d = lb[t[0]]||{};
+    const annual = d.annual||0, remaining = d.remaining||0;
+    const used = annual-remaining;
+    const pct = annual>0?Math.round((used/annual)*100):0;
+    const color = pct<60?'var(--green)':pct<85?'var(--orange)':'var(--red)';
+    h += '<div class="lb-item"><div class="lb-type">'+t[1]+'</div><div class="lb-num">'+fmt(remaining)+'/'+fmt(annual)+'</div>'
+      +'<div class="lb-bar"><div class="lb-fill" style="width:'+pct+'%;background:'+color+'"></div></div></div>';
+  });
+  el.innerHTML = h;
+}
+
+function getNextDays(n) {
+  const days = [];
+  const d = new Date(); d.setDate(d.getDate()+1);
+  const holDates = new Set();
+  ((S.holidays||{}).holidays||[]).forEach(function(h){if(!h.disabled)holDates.add(h.date)});
+  const blEntries = {};
+  ((S.blackout||{}).dates||[]).forEach(function(b){blEntries[b.date]=b});
+  const wkends = new Set((S.blackout||{}).working_weekends||[]);
+  for (let i=0;i<n;i++){
+    const ds = d.toISOString().slice(0,10);
+    const wd = d.getDay();
+    const isWkend = wd===0||wd===6;
+    let skip = null, badge = 'ok', label = 'Active', cls = 'badge-ok';
+    if (isWkend && !wkends.has(ds)) { skip='Weekend'; badge='off'; label='Weekend'; cls='badge-off'; }
+    else if (holDates.has(ds)) { skip='Holiday'; badge='skip'; label='Holiday'; cls='badge-off'; }
+    else if (blEntries[ds]) {
+      const e = blEntries[ds];
+      const lt = e.leave_type;
+      if (lt) {
+        const m = {casual:'CL',sick:'SL',earned:'EL',other:'Leave'};
+        label = (m[lt]||'Leave')+(e.days===0.5?' \u00bd':'');
+        cls = 'badge-leave';
+      } else { label='Skip'; cls='badge-skip'; }
+      skip = label;
+    }
+    const dayNames = ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'];
+    const monthNames = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+    days.push({date:ds, day:dayNames[wd], label:monthNames[d.getMonth()]+' '+d.getDate(), skip:skip, badge:label, cls:cls, isWkend:isWkend});
+    d.setDate(d.getDate()+1);
+  }
+  return days;
+}
+
+function renderForecast() {
+  const el = document.getElementById('forecast-content');
+  const days = getNextDays(7);
+  let h = '';
+  days.forEach(function(d){
+    h += '<div class="wd-row"><span class="wd-day">'+d.day+'</span><span class="wd-date">'+d.label+'</span><span class="badge '+d.cls+'">'+d.badge+'</span></div>';
+  });
+  el.innerHTML = h;
+}
+
+function renderSkips() {
+  const el = document.getElementById('skips-content');
+  const dates = ((S.blackout||{}).dates||[]).filter(function(d){return d.date>=today()});
+  if (!dates.length) { el.innerHTML='<div class="empty">No active leaves or skips</div>'; return; }
+  let h = '';
+  dates.sort(function(a,b){return a.date.localeCompare(b.date)});
+  dates.forEach(function(d){
+    const dt = new Date(d.date+'T12:00:00');
+    const dayStr = ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'][dt.getDay()];
+    const monthStr = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'][dt.getMonth()];
+    const daysLabel = d.days===0.5?' (\u00bd day)':'';
+    h += '<div class="skip-item"><div><div class="skip-info">'+d.reason+daysLabel+'</div><div class="skip-date">'+dayStr+' '+monthStr+' '+dt.getDate()+'</div></div>'
+      +'<button class="btn btn-sm btn-danger" onclick="cancelSkip(\''+d.date+'\')">Cancel</button></div>';
+  });
+  el.innerHTML = h;
+}
+
+function renderHolidays() {
+  const el = document.getElementById('holidays-content');
+  const td = today();
+  const hols = ((S.holidays||{}).holidays||[]).filter(function(h){return h.date>=td&&!h.disabled}).sort(function(a,b){return a.date.localeCompare(b.date)}).slice(0,8);
+  if (!hols.length) { el.innerHTML='<div class="empty">No upcoming holidays</div>'; return; }
+  let h = '';
+  hols.forEach(function(ho){
+    const dt = new Date(ho.date+'T12:00:00');
+    const dayStr = ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'][dt.getDay()];
+    const monthStr = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'][dt.getMonth()];
+    const moon = ho.moon_dependent?' \u263D':'';
+    h += '<div class="hol-item"><strong>'+ho.label+'</strong>'+moon+'<div class="hol-date">'+dayStr+' '+monthStr+' '+dt.getDate()+', '+dt.getFullYear()+'</div></div>';
+  });
+  el.innerHTML = h;
+}
+
+function renderAnalytics() {
+  const el1 = document.getElementById('analytics-summary');
+  const el2 = document.getElementById('analytics-history');
+  const lb = S.balance||{};
+  const leaves = ((S.blackout||{}).dates||[]).filter(function(d){return d.leave_type});
+  const types = [['casual','Casual'],['sick','Sick'],['earned','Earned']];
+  let h = '';
+  types.forEach(function(t){
+    const d = lb[t[0]]||{};
+    const used = (d.annual||0)-(d.remaining||0);
+    h += '<div class="analytics-item"><div class="analytics-num">'+fmt(d.remaining||0)+'/'+fmt(d.annual||0)+'</div><div class="analytics-label">'+t[1]+'</div><div class="analytics-used">'+fmt(used)+' used</div></div>';
+  });
+  el1.innerHTML = h;
+  if (!leaves.length) { el2.innerHTML='<div class="empty">No leaves recorded</div>'; return; }
+  h = '';
+  leaves.sort(function(a,b){return b.date.localeCompare(a.date)});
+  leaves.forEach(function(l){
+    const daysLbl = l.days===0.5?' (\u00bd day)':'';
+    h += '<div class="history-item">'+l.date+' \u2014 '+l.reason+daysLbl+'</div>';
+  });
+  el2.innerHTML = h;
+}
+
+function renderSettings() {
+  document.getElementById('set-repo').textContent = GH.repo;
+  document.getElementById('set-token-mask').textContent = GH.token?'\u2022\u2022\u2022\u2022'+GH.token.slice(-4):'--';
+  const lb = S.balance||{};
+  document.getElementById('set-year').value = lb.year||2026;
+  document.getElementById('set-ca').value = (lb.casual||{}).annual||5;
+  document.getElementById('set-cr').value = (lb.casual||{}).remaining||5;
+  document.getElementById('set-sa').value = (lb.sick||{}).annual||30;
+  document.getElementById('set-sr').value = (lb.sick||{}).remaining||30;
+  document.getElementById('set-ea').value = (lb.earned||{}).annual||23;
+  document.getElementById('set-er').value = (lb.earned||{}).remaining||23;
+  document.getElementById('set-cfl').value = ((lb.earned||{}).carry_forward_limit)||5;
+  document.getElementById('set-cf').value = (lb.earned||{}).carried_forward||0;
+}
+
+// ===== Actions =====
+function showToast(msg, type) {
+  const old = document.getElementById('toast'); if(old)old.remove();
+  const t = document.createElement('div');
+  t.id='toast'; t.className='toast toast-'+(type||'ok'); t.textContent=msg;
+  document.body.appendChild(t);
+  setTimeout(function(){t.style.transition='opacity .4s';t.style.opacity='0';setTimeout(function(){t.remove()},400)},2500);
+}
+
+function openLeaveModal(dateStr) {
+  const d = dateStr || '';
+  document.getElementById('lm-date').value = d || getNextWorkday();
+  document.getElementById('lm-type').value = 'casual';
+  document.getElementById('lm-half').checked = false;
+  document.getElementById('lm-half-row').style.display = '';
+  updateLmLabel();
+  document.getElementById('leave-modal').style.display = 'flex';
+}
+
+function getNextWorkday() {
+  const d = new Date(); d.setDate(d.getDate()+1);
+  while (d.getDay()===0||d.getDay()===6) d.setDate(d.getDate()+1);
+  return d.toISOString().slice(0,10);
+}
+
+function updateLmLabel() {
+  const v = document.getElementById('lm-date').value;
+  if (!v) { document.getElementById('lm-date-label').textContent=''; return; }
+  const dt = new Date(v+'T12:00:00');
+  const days=['Sun','Mon','Tue','Wed','Thu','Fri','Sat'];
+  const months=['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+  document.getElementById('lm-date-label').textContent=days[dt.getDay()]+', '+months[dt.getMonth()]+' '+dt.getDate()+' '+dt.getFullYear();
+}
+document.getElementById('lm-date').addEventListener('change', updateLmLabel);
+
+function closeLeaveModal() { document.getElementById('leave-modal').style.display='none'; }
+
+function toggleLmHalf() {
+  const t = document.getElementById('lm-type').value;
+  document.getElementById('lm-half-row').style.display = t==='casual'?'':'none';
+  if (t!=='casual') document.getElementById('lm-half').checked = false;
+}
+
+async function confirmLeave() {
+  const dateVal = document.getElementById('lm-date').value;
+  const type = document.getElementById('lm-type').value;
+  const half = document.getElementById('lm-half').checked;
+  const days = half ? 0.5 : 1;
+  if (!dateVal) { showToast('Select a date','error'); return; }
+
+  // Check duplicate
+  const existing = (S.blackout.dates||[]).find(function(d){return d.date===dateVal});
+  if (existing) { showToast('Date already blocked','error'); closeLeaveModal(); return; }
+
+  // Check balance
+  const typeLabels = {casual:'Casual Leave',sick:'Sick Leave',earned:'Earned Leave',other:'Other Leave'};
+  const reason = typeLabels[type]||'Leave';
+  const balKey = type==='other'?null:type;
+  if (balKey && S.balance[balKey]) {
+    const rem = S.balance[balKey].remaining||0;
+    if (rem < days) { showToast('Insufficient balance: '+rem+' left','error'); closeLeaveModal(); return; }
+  }
+
+  closeLeaveModal();
+  showToast('Marking leave...','ok');
+
+  // Update local state
+  const entry = {date:dateVal, reason:reason+(half?' (Half Day)':''), leave_type:type, days:days, added:new Date().toISOString().slice(0,16).replace('T',' ')};
+  if (!S.blackout.dates) S.blackout.dates = [];
+  S.blackout.dates.push(entry);
+  S.blackout.dates.sort(function(a,b){return a.date.localeCompare(b.date)});
+
+  if (balKey && S.balance[balKey]) {
+    const v = S.balance[balKey].remaining - days;
+    S.balance[balKey].remaining = v===Math.floor(v)?Math.floor(v):v;
+  }
+
+  // Push to GitHub
+  const [r1,r2] = await Promise.all([
+    GH.writeFile('blackout.json', S.blackout, S.shas.blackout, 'Mark '+reason+' for '+dateVal+' (mobile)'),
+    GH.writeFile('leave_balance.json', S.balance, S.shas.balance, 'Update balance: '+reason+' (mobile)')
+  ]);
+  if (r1.ok) S.shas.blackout = r1.sha;
+  if (r2.ok) S.shas.balance = r2.sha;
+
+  localStorage.setItem(CACHE_KEY, JSON.stringify(S));
+  renderAll();
+  showToast(r1.ok&&r2.ok?reason+' marked for '+dateVal:'Saved locally, sync failed','ok');
+}
+
+async function cancelSkip(date) {
+  if (!confirm('Cancel leave/skip for '+date+'?')) return;
+  const dates = S.blackout.dates||[];
+  const idx = dates.findIndex(function(d){return d.date===date});
+  if (idx===-1) return;
+
+  const removed = dates[idx];
+  dates.splice(idx,1);
+
+  // Restore balance
+  if (removed.leave_type && removed.leave_type!=='other' && S.balance[removed.leave_type]) {
+    const v = S.balance[removed.leave_type].remaining + (removed.days||1);
+    S.balance[removed.leave_type].remaining = v===Math.floor(v)?Math.floor(v):v;
+  }
+
+  showToast('Cancelling...','ok');
+  const [r1,r2] = await Promise.all([
+    GH.writeFile('blackout.json', S.blackout, S.shas.blackout, 'Cancel '+removed.reason+' for '+date+' (mobile)'),
+    GH.writeFile('leave_balance.json', S.balance, S.shas.balance, 'Restore balance: cancel '+date+' (mobile)')
+  ]);
+  if (r1.ok) S.shas.blackout = r1.sha;
+  if (r2.ok) S.shas.balance = r2.sha;
+
+  localStorage.setItem(CACHE_KEY, JSON.stringify(S));
+  renderAll();
+  showToast('Cancelled '+removed.reason,'ok');
+}
+
+async function addSkip() {
+  const date = document.getElementById('skip-date').value;
+  const reason = document.getElementById('skip-reason').value.trim()||'Manual skip';
+  if (!date) { showToast('Select a date','error'); return; }
+  const existing = (S.blackout.dates||[]).find(function(d){return d.date===date});
+  if (existing) { showToast('Date already blocked','error'); return; }
+
+  if (!S.blackout.dates) S.blackout.dates = [];
+  S.blackout.dates.push({date:date, reason:reason, added:new Date().toISOString().slice(0,16).replace('T',' ')});
+  S.blackout.dates.sort(function(a,b){return a.date.localeCompare(b.date)});
+
+  showToast('Adding skip...','ok');
+  const r = await GH.writeFile('blackout.json', S.blackout, S.shas.blackout, 'Skip '+date+': '+reason+' (mobile)');
+  if (r.ok) S.shas.blackout = r.sha;
+  localStorage.setItem(CACHE_KEY, JSON.stringify(S));
+  renderAll();
+  document.getElementById('skip-date').value='';
+  document.getElementById('skip-reason').value='';
+  showToast('Skip added for '+date,'ok');
+}
+
+async function saveBalance() {
+  const lb = S.balance;
+  lb.year = parseInt(document.getElementById('set-year').value)||2026;
+  if(!lb.casual)lb.casual={};if(!lb.sick)lb.sick={};if(!lb.earned)lb.earned={};
+  const num = v => {const f=parseFloat(v);return f===Math.floor(f)?Math.floor(f):f};
+  lb.casual.annual=num(document.getElementById('set-ca').value);
+  lb.casual.remaining=num(document.getElementById('set-cr').value);
+  lb.sick.annual=num(document.getElementById('set-sa').value);
+  lb.sick.remaining=num(document.getElementById('set-sr').value);
+  lb.earned.annual=num(document.getElementById('set-ea').value);
+  lb.earned.remaining=num(document.getElementById('set-er').value);
+  lb.earned.carry_forward_limit=parseInt(document.getElementById('set-cfl').value)||5;
+  lb.earned.carried_forward=num(document.getElementById('set-cf').value);
+
+  showToast('Saving...','ok');
+  const r = await GH.writeFile('leave_balance.json', lb, S.shas.balance, 'Update leave balance (mobile)');
+  if (r.ok) S.shas.balance = r.sha;
+  localStorage.setItem(CACHE_KEY, JSON.stringify(S));
+  renderAll();
+  showToast(r.ok?'Leave balance saved':'Save failed','ok');
+}
+
+// ===== Start =====
+init();
+</script>
+</body>
+</html>
