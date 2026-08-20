@@ -289,14 +289,21 @@ const GH = {
     } catch(e) { console.error('Read '+path+':',e); return {content:null,sha:null}; }
   },
   async writeFile(path, content, sha, msg) {
-    try {
-      const body = {message:msg||'Update from mobile',content:btoa(unescape(encodeURIComponent(JSON.stringify(content,null,2))))};
-      if (sha) body.sha = sha;
-      const r = await fetch('https://api.github.com/repos/'+this.repo+'/contents/'+path, {method:'PUT',headers:this.headers(),body:JSON.stringify(body)});
-      if (!r.ok) { const e = await r.json(); throw new Error(e.message||'HTTP '+r.status); }
-      const d = await r.json();
-      return {ok:true, sha:d.content.sha};
-    } catch(e) { console.error('Write '+path+':',e); return {ok:false,error:e.message}; }
+    for (let attempt=0; attempt<3; attempt++) {
+      try {
+        const body = {message:msg||'Update from mobile',content:btoa(unescape(encodeURIComponent(JSON.stringify(content,null,2))))};
+        if (sha) body.sha = sha;
+        const r = await fetch('https://api.github.com/repos/'+this.repo+'/contents/'+path, {method:'PUT',headers:this.headers(),body:JSON.stringify(body)});
+        if (r.status===409) {
+          const fresh = await this.readFile(path);
+          if (fresh.sha) { sha = fresh.sha; continue; }
+        }
+        if (!r.ok) { const e = await r.json(); throw new Error(e.message||'HTTP '+r.status); }
+        const d = await r.json();
+        return {ok:true, sha:d.content.sha};
+      } catch(e) { if (attempt===2) { console.error('Write '+path+':',e); return {ok:false,error:e.message}; } }
+    }
+    return {ok:false,error:'Max retries'};
   }
 };
 
