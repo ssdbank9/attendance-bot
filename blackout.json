@@ -1,11 +1,5 @@
 {
-  "dates": [
-    {
-      "date": "2026-08-21",
-      "reason": "Manual skip",
-      "added": "2026-08-20 14:50"
-    }
-  ],
+  "dates": [],
   "ranges": [],
   "working_weekends": []
 }
