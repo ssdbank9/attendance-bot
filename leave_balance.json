@@ -2,7 +2,7 @@
   "year": 2026,
   "casual": {
     "annual": 5,
-    "remaining": 5
+    "remaining": 4
   },
   "sick": {
     "annual": 30,
