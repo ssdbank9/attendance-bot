@@ -1,13 +1,6 @@
 {
   "dates": [],
-  "ranges": [
-    {
-      "start": "2026-08-17",
-      "end": "2026-08-28",
-      "reason": "Leave",
-      "added": "2026-08-20 23:02"
-    }
-  ],
+  "ranges": [],
   "working_weekends": [
     "2026-08-22"
   ]
