@@ -1,0 +1,17 @@
+{
+  "year": 2026,
+  "casual": {
+    "annual": 5,
+    "remaining": 5
+  },
+  "sick": {
+    "annual": 30,
+    "remaining": 30
+  },
+  "earned": {
+    "annual": 23,
+    "remaining": 23,
+    "carry_forward_limit": 5,
+    "carried_forward": 0
+  }
+}
