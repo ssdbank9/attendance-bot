@@ -909,6 +909,11 @@ def dashboard():
         auto_refresh()
     except Exception:
         pass
+    try:
+        from cloud_sync import pull_from_cloud
+        pull_from_cloud()
+    except Exception:
+        pass
     status = load_json(STATUS_FILE)
     config = load_config()
     upcoming = get_upcoming_holidays()
