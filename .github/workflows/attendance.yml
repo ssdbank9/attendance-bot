@@ -1,0 +1,63 @@
+name: Attendance Bot
+
+on:
+  schedule:
+    # Time-In: 8:45 AM PKT = 3:45 AM UTC (Mon-Fri)
+    - cron: '45 3 * * 1-5'
+    # Time-Out: 8:00 PM PKT = 3:00 PM UTC (Mon-Fri)
+    - cron: '0 15 * * 1-5'
+  workflow_dispatch:
+    inputs:
+      action:
+        description: 'Force action (I=TimeIn, O=TimeOut)'
+        required: false
+        default: 'auto'
+
+jobs:
+  mark-attendance:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Determine action
+        id: action
+        run: |
+          if [ "${{ github.event.inputs.action }}" != "" ] && [ "${{ github.event.inputs.action }}" != "auto" ]; then
+            echo "type=${{ github.event.inputs.action }}" >> $GITHUB_OUTPUT
+            echo "label=Manual" >> $GITHUB_OUTPUT
+          else
+            HOUR=$(TZ='Asia/Karachi' date +%H)
+            if [ "$HOUR" -lt 12 ]; then
+              echo "type=I" >> $GITHUB_OUTPUT
+              echo "label=Time-In" >> $GITHUB_OUTPUT
+            else
+              echo "type=O" >> $GITHUB_OUTPUT
+              echo "label=Time-Out" >> $GITHUB_OUTPUT
+            fi
+          fi
+
+      - name: Random delay (natural timing)
+        run: |
+          if [ "${{ steps.action.outputs.type }}" = "I" ]; then
+            DELAY=$((RANDOM % 1200))
+          else
+            DELAY=$((RANDOM % 5400))
+          fi
+          echo "Sleeping ${DELAY}s for natural timing..."
+          sleep $DELAY
+
+      - name: Mark Attendance
+        run: |
+          RESPONSE=$(curl -s -X POST \
+            "https://portalservice.aku.edu/Service1.svc/json/TimeInTimeOut/" \
+            -H "Content-Type: application/json; charset=utf-8" \
+            -d "{\"_action\":\"${{ steps.action.outputs.type }}\",\"_userid\":\"${{ secrets.AKU_USER_ID }}\",\"_password\":\"${{ secrets.AKU_PASSWORD }}\"}")
+
+          echo "${{ steps.action.outputs.label }} response: $RESPONSE"
+
+          if echo "$RESPONSE" | grep -qi "invalid\|error"; then
+            if echo "$RESPONSE" | grep -qi "already"; then
+              echo "Already marked - OK"
+            else
+              echo "FAILED"
+              exit 1
+            fi
+          fi
