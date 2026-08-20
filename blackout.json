@@ -1,5 +1,13 @@
 {
-  "dates": [],
+  "dates": [
+    {
+      "date": "2026-08-25",
+      "reason": "Sick Leave",
+      "leave_type": "sick",
+      "days": 1.0,
+      "added": "2026-08-20 16:35"
+    }
+  ],
   "ranges": [],
   "working_weekends": []
 }
