@@ -5,11 +5,10 @@
   "timein_time": "08:52:14",
   "timestamp": "2026-08-18 10:50:48",
   "timeout": {
-    "date": "2026-08-19",
-    "status": "success",
-    "message": "Time-Out marked at 21:06:41",
-    "timestamp": "2026-08-19 21:06:44",
-    "action_time": "21:06:41"
+    "date": "2026-08-20",
+    "status": "failed",
+    "message": "Time-Out FAILED after 3 attempts",
+    "timestamp": "2026-08-20 20:06:24"
   },
   "timein": {
     "date": "2026-08-20",
