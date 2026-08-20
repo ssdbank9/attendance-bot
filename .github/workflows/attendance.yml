@@ -1,3 +1,21 @@
+# AKU Attendance Bot - GitHub Actions (FREE)
+#
+# SETUP:
+# 1. Create a FREE GitHub account at github.com (if you don't have one)
+# 2. Click "+" -> "New repository" -> Name: "attendance-bot" -> Private -> Create
+# 3. Click "Add file" -> "Create new file"
+# 4. Name: .github/workflows/attendance.yml
+# 5. Paste this entire file content
+# 6. Commit
+# 7. Go to Settings -> Secrets and variables -> Actions -> New repository secret
+#    - Name: AKU_USER_ID     Value: 214874
+#    - Name: AKU_PASSWORD     Value: Zeenat123v!Q
+# 8. Done! Runs automatically Mon-Fri.
+# 9. To test: Go to Actions tab -> "Attendance Bot" -> "Run workflow" -> Run
+#
+# HIERARCHY: GitHub fires FIRST (0-2 min delay), Desktop bot fires second (~5 min),
+# Google Script fires last (30-40 min delay). API handles duplicates gracefully.
+
 name: Attendance Bot
 
 on:
@@ -34,14 +52,14 @@ jobs:
             fi
           fi
 
-      - name: Random delay (natural timing)
+      - name: Random delay (fires FIRST in hierarchy)
         run: |
           if [ "${{ steps.action.outputs.type }}" = "I" ]; then
-            DELAY=$((RANDOM % 1200))
+            DELAY=$((RANDOM % 120))
           else
-            DELAY=$((RANDOM % 5400))
+            DELAY=$((RANDOM % 300))
           fi
-          echo "Sleeping ${DELAY}s for natural timing..."
+          echo "Sleeping ${DELAY}s (GitHub = primary, fires first)..."
           sleep $DELAY
 
       - name: Mark Attendance
@@ -50,9 +68,10 @@ jobs:
             "https://portalservice.aku.edu/Service1.svc/json/TimeInTimeOut/" \
             -H "Content-Type: application/json; charset=utf-8" \
             -d "{\"_action\":\"${{ steps.action.outputs.type }}\",\"_userid\":\"${{ secrets.AKU_USER_ID }}\",\"_password\":\"${{ secrets.AKU_PASSWORD }}\"}")
-
+          
           echo "${{ steps.action.outputs.label }} response: $RESPONSE"
-
+          
+          # Fail the job if response contains error
           if echo "$RESPONSE" | grep -qi "invalid\|error"; then
             if echo "$RESPONSE" | grep -qi "already"; then
               echo "Already marked - OK"
