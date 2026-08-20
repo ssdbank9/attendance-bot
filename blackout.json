@@ -1,13 +1,5 @@
 {
-  "dates": [
-    {
-      "date": "2026-08-21",
-      "reason": "Casual Leave",
-      "leave_type": "casual",
-      "days": 1.0,
-      "added": "2026-08-20 16:17"
-    }
-  ],
+  "dates": [],
   "ranges": [],
   "working_weekends": []
 }
