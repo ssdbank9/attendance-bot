@@ -1,0 +1,28 @@
+# Credentials - NEVER push
+config.json
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+
+# Logs
+timein_logs/
+*.log
+
+# Local HTML page and assets
+timein_page.html
+timein_page_files/
+
+# Backups
+cloud_backup/
+
+# Static assets (served locally only)
+static/
+
+# Editor / OS
+.vscode/
+*.swp
+*~
+Thumbs.db
+Desktop.ini
