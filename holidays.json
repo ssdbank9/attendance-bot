@@ -1,0 +1,186 @@
+{
+  "holidays": [
+    {
+      "date": "2026-01-01",
+      "label": "New Year's Day (Bank Holiday)",
+      "confirmed": true
+    },
+    {
+      "date": "2026-02-05",
+      "label": "Kashmir Day",
+      "confirmed": true
+    },
+    {
+      "date": "2026-03-21",
+      "label": "Eid ul-Fitr (Day 1)",
+      "confirmed": true,
+      "moon_dependent": true
+    },
+    {
+      "date": "2026-03-22",
+      "label": "Eid ul-Fitr (Day 2)",
+      "confirmed": true,
+      "moon_dependent": true
+    },
+    {
+      "date": "2026-03-23",
+      "label": "Eid ul-Fitr (Day 3) / Pakistan Day",
+      "confirmed": true,
+      "moon_dependent": true
+    },
+    {
+      "date": "2026-05-01",
+      "label": "Labour Day",
+      "confirmed": true
+    },
+    {
+      "date": "2026-05-27",
+      "label": "Eid ul-Adha (Day 1)",
+      "confirmed": true,
+      "moon_dependent": true
+    },
+    {
+      "date": "2026-05-28",
+      "label": "Eid ul-Adha (Day 2) / Youm-e-Takbeer",
+      "confirmed": true,
+      "moon_dependent": true
+    },
+    {
+      "date": "2026-05-29",
+      "label": "Eid ul-Adha (Day 3)",
+      "confirmed": true,
+      "moon_dependent": true
+    },
+    {
+      "date": "2026-06-24",
+      "label": "Ashura (Day 1)",
+      "confirmed": true,
+      "moon_dependent": true
+    },
+    {
+      "date": "2026-06-25",
+      "label": "Ashura (Day 2)",
+      "confirmed": true,
+      "moon_dependent": true
+    },
+    {
+      "date": "2026-08-14",
+      "label": "Independence Day",
+      "confirmed": true
+    },
+    {
+      "date": "2026-08-26",
+      "label": "Eid Milad-un-Nabi",
+      "confirmed": true,
+      "moon_dependent": true,
+      "disabled": false
+    },
+    {
+      "date": "2026-11-09",
+      "label": "Iqbal Day",
+      "confirmed": true,
+      "disabled": false
+    },
+    {
+      "date": "2026-12-25",
+      "label": "Quaid-e-Azam Day / Christmas",
+      "confirmed": true
+    },
+    {
+      "date": "2026-12-26",
+      "label": "Christmas (Christian Community)",
+      "confirmed": true,
+      "disabled": true
+    },
+    {
+      "date": "2027-02-05",
+      "label": "Kashmir Day",
+      "confirmed": true
+    },
+    {
+      "date": "2027-03-08",
+      "label": "Eid ul-Fitr (Day 1)",
+      "confirmed": true,
+      "moon_dependent": true
+    },
+    {
+      "date": "2027-03-09",
+      "label": "Eid ul-Fitr (Day 2)",
+      "confirmed": true,
+      "moon_dependent": true
+    },
+    {
+      "date": "2027-03-10",
+      "label": "Eid ul-Fitr (Day 3)",
+      "confirmed": true,
+      "moon_dependent": true
+    },
+    {
+      "date": "2027-03-23",
+      "label": "Pakistan Day",
+      "confirmed": true
+    },
+    {
+      "date": "2027-05-01",
+      "label": "Labour Day",
+      "confirmed": true,
+      "disabled": false
+    },
+    {
+      "date": "2027-05-16",
+      "label": "Eid ul-Adha (Day 1)",
+      "confirmed": false,
+      "moon_dependent": true
+    },
+    {
+      "date": "2027-05-17",
+      "label": "Eid ul-Adha (Day 2)",
+      "confirmed": false,
+      "moon_dependent": true
+    },
+    {
+      "date": "2027-05-18",
+      "label": "Eid ul-Adha (Day 3)",
+      "confirmed": false,
+      "moon_dependent": true
+    },
+    {
+      "date": "2027-05-28",
+      "label": "Youm-e-Takbeer",
+      "confirmed": true
+    },
+    {
+      "date": "2027-06-14",
+      "label": "Ashura (Day 1)",
+      "confirmed": false,
+      "moon_dependent": true
+    },
+    {
+      "date": "2027-06-15",
+      "label": "Ashura (Day 2)",
+      "confirmed": false,
+      "moon_dependent": true
+    },
+    {
+      "date": "2027-08-14",
+      "label": "Independence Day",
+      "confirmed": true
+    },
+    {
+      "date": "2027-08-15",
+      "label": "Eid Milad-un-Nabi",
+      "confirmed": false,
+      "moon_dependent": true
+    },
+    {
+      "date": "2027-11-09",
+      "label": "Iqbal Day",
+      "confirmed": true
+    },
+    {
+      "date": "2027-12-25",
+      "label": "Quaid-e-Azam Day / Christmas",
+      "confirmed": true
+    }
+  ]
+}
