@@ -1,0 +1,21 @@
+{
+  "date": "2026-08-18",
+  "status": "success",
+  "message": "Time-In marked at 08:52:14",
+  "timein_time": "08:52:14",
+  "timestamp": "2026-08-18 10:50:48",
+  "timeout": {
+    "date": "2026-08-19",
+    "status": "success",
+    "message": "Time-Out marked at 21:06:41",
+    "timestamp": "2026-08-19 21:06:44",
+    "action_time": "21:06:41"
+  },
+  "timein": {
+    "date": "2026-08-20",
+    "status": "success",
+    "message": "Time-In marked at 09:03:04",
+    "timestamp": "2026-08-20 09:03:06",
+    "action_time": "09:03:04"
+  }
+}
