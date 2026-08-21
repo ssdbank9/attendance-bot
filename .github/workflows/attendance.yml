@@ -7,6 +7,10 @@
 # The AKU API (portalservice.aku.edu) is a private-network address and is
 # NOT reachable from GitHub-hosted cloud runners - that's why this workflow
 # requires the self-hosted runner registered on the AKU-network desktop.
+#
+# Steps use PowerShell (not bash) - on this Windows runner, `shell: bash`
+# resolves to the WSL stub at C:\WINDOWS\system32\bash.EXE, not Git Bash,
+# and fails if no WSL distro is installed.
 
 name: Attendance Bot
 
@@ -29,23 +33,21 @@ jobs:
     steps:
       - name: Determine action
         id: action
-        shell: bash
+        shell: pwsh
         run: |
-          INPUT_ACTION="${{ github.event.inputs.action }}"
-          if [ -n "$INPUT_ACTION" ] && [ "$INPUT_ACTION" != "auto" ]; then
-            echo "mode=$INPUT_ACTION" >> "$GITHUB_OUTPUT"
-            echo "now_flag=--now" >> "$GITHUB_OUTPUT"
-          else
-            HOUR=$(TZ='Asia/Karachi' date +%H)
-            if [ "$HOUR" -lt 12 ]; then
-              echo "mode=timein" >> "$GITHUB_OUTPUT"
-            else
-              echo "mode=timeout" >> "$GITHUB_OUTPUT"
-            fi
-            echo "now_flag=" >> "$GITHUB_OUTPUT"
-          fi
+          $inputAction = "${{ github.event.inputs.action }}"
+          if ($inputAction -and $inputAction -ne "auto") {
+            $mode = $inputAction
+            $nowFlag = "--now"
+          } else {
+            $hour = [int](Get-Date -Format "HH")
+            if ($hour -lt 12) { $mode = "timein" } else { $mode = "timeout" }
+            $nowFlag = ""
+          }
+          Add-Content -Path $env:GITHUB_OUTPUT -Value "mode=$mode"
+          Add-Content -Path $env:GITHUB_OUTPUT -Value "now_flag=$nowFlag"
 
       - name: Mark attendance
-        shell: bash
+        shell: pwsh
         run: |
           python "D:/DropBox/Self/Claude/Attendance Management/timein_bot.py" ${{ steps.action.outputs.mode }} ${{ steps.action.outputs.now_flag }}
