@@ -6,9 +6,10 @@
   "timestamp": "2026-08-18 10:50:48",
   "timeout": {
     "date": "2026-08-20",
-    "status": "failed",
-    "message": "Time-Out FAILED after 3 attempts",
-    "timestamp": "2026-08-20 21:07:55"
+    "status": "success",
+    "message": "Time-Out marked at 20:05:00 (corrected - portal confirmed this succeeded; local record was wrong due to the response-parsing bug fixed on 2026-08-21)",
+    "timestamp": "2026-08-20 20:05:00",
+    "action_time": "20:05:00"
   },
   "timein": {
     "date": "2026-08-21",
