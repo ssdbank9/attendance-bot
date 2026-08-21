@@ -12,6 +12,7 @@ Retries on failure. Phone notification via Claude Code push.
 
 import json
 import random
+import re
 import sys
 import time
 import logging
@@ -218,6 +219,28 @@ def pick_target_time(mode):
 API_URL = "https://portalservice.aku.edu/Service1.svc/json/TimeInTimeOut/"
 
 
+def parse_aku_time(message, label):
+    """Extract the real HH:MM:SS AKU reports for "Time In"/"Time Out" (or
+    "Timed In"/"Timed Out") from its response text, e.g. "Time In: Fri,
+    Aug 21, 2026 - 8:05 AM PST" -> "08:05:00". label is "In" or "Out".
+    Returns None if that field isn't present in the message. AKU's own
+    timestamp is more accurate than our local clock at the moment we
+    happened to check - especially when another automation (e.g. a
+    leftover Google Apps Script trigger) completed the action earlier."""
+    if isinstance(message, list):
+        message = message[0] if message else ""
+    pattern = r"Timed?\s+" + label + r":\s*\w+,\s*\w+\s+\d{1,2},\s*\d{4}\s*-\s*(\d{1,2}):(\d{2})\s*([AP]M)"
+    m = re.search(pattern, message, re.IGNORECASE)
+    if not m:
+        return None
+    hour, minute, ampm = int(m.group(1)), int(m.group(2)), m.group(3).upper()
+    if ampm == "PM" and hour != 12:
+        hour += 12
+    if ampm == "AM" and hour == 12:
+        hour = 0
+    return f"{hour:02d}:{minute:02d}:00"
+
+
 def classify_aku_message(message):
     """Given the AKU API's TimeInTimeOutResult text, decide whether it means
     the action succeeded (or was already done) vs a real error. Returns
@@ -263,7 +286,9 @@ def run_action(mode):
     try:
         ok, message = call_aku_api(mode, creds["user_id"], creds["password"])
         if ok:
-            now = datetime.now().strftime("%H:%M:%S")
+            field = "In" if mode == "timein" else "Out"
+            real_time = parse_aku_time(message, field)
+            now = real_time or datetime.now().strftime("%H:%M:%S")
             log.info("%s complete at %s (API: %s)", label, now, message)
             return True, now
         return False, message
@@ -326,10 +351,27 @@ def run_action_selenium(mode):
         return False, f"Clicked but could not verify: {e}"
 
     if not ok:
+        # Can happen when another automation (e.g. a leftover Google Apps
+        # Script trigger) already completed the action before we got here.
+        # Safe to cross-check via the OTHER action's status ONLY for
+        # timeout - main() already confirmed today's Time-In succeeded
+        # before ever attempting a Time-Out, so calling action=I here is
+        # a safe idempotent check, not a fresh action.
+        if mode == "timeout":
+            try:
+                _, other_message = call_aku_api("timein", user_id, password)
+                real_time = parse_aku_time(other_message, "Out")
+                if real_time:
+                    log.info("%s already completed by another actor - confirmed via reconciliation: %s", label, other_message)
+                    return True, real_time
+            except Exception:
+                pass
         log.warning("%s clicked but API verification says: %s", label, message)
         return False, f"Clicked but not confirmed ({message})"
 
-    now = datetime.now().strftime("%H:%M:%S")
+    field = "In" if mode == "timein" else "Out"
+    real_time = parse_aku_time(message, field)
+    now = real_time or datetime.now().strftime("%H:%M:%S")
     log.info("%s complete at %s (Selenium, verified: %s)", label, now, message)
     return True, now
 

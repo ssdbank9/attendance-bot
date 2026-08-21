@@ -2,15 +2,15 @@
   "timein": {
     "date": "2026-08-21",
     "status": "success",
-    "message": "Time-In marked at 09:19:54",
-    "timestamp": "2026-08-21 19:11:48",
-    "action_time": "09:19:54"
+    "message": "Time-In marked at 08:05:00 (corrected - portal confirmed this was the real time; our own check at 09:19:54 just happened to be when we noticed it)",
+    "timestamp": "2026-08-21 21:20:17",
+    "action_time": "08:05:00"
   },
   "timeout": {
-    "date": "2026-08-20",
+    "date": "2026-08-21",
     "status": "success",
-    "message": "Migrated from history: timeout at 20:05:00",
-    "timestamp": "2026-08-21 19:11:48",
-    "action_time": "20:05:00"
+    "message": "Time-Out marked at 20:33:00 (corrected - portal confirmed this succeeded via another automation; local record was wrong because our own attempts arrived after it was already done)",
+    "timestamp": "2026-08-21 21:20:00",
+    "action_time": "20:33:00"
   }
 }
