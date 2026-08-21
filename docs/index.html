@@ -7,6 +7,10 @@
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <title>Attendance Bot</title>
+<!-- libsodium: used only to encrypt new credential values into GitHub
+     Actions secrets (crypto_box_seal, per GitHub's own documented
+     approach) before they ever leave the browser. -->
+<script src="https://cdn.jsdelivr.net/npm/libsodium-wrappers@0.7.13/dist/browsers/sodium.js"></script>
 <style>
 :root{--bg:#fff;--bg2:#f5f6fa;--bg3:#eef1f6;--text:#1a1a2e;--text2:#666;--primary:#1565c0;--primary-light:#e3f2fd;--green:#27ae60;--orange:#e67e22;--red:#e74c3c;--border:#e0e0e0;--shadow:0 1px 4px rgba(0,0,0,.08);--radius:12px}
 @media(prefers-color-scheme:dark){:root:not([data-theme="light"]){--bg:#0f0f1a;--bg2:#1a1a2e;--bg3:#252540;--text:#e8e8f0;--text2:#999;--primary:#4da6ff;--primary-light:#1a2a40;--border:#333;--shadow:0 1px 4px rgba(0,0,0,.3)}}
@@ -255,6 +259,35 @@ select.input{appearance:none;background-image:url("data:image/svg+xml,%3Csvg xml
       </div>
     </div>
     <div class="card">
+      <div class="card-title">Login Credentials</div>
+      <p style="font-size:.75rem;color:var(--text2);margin-bottom:.5rem">Used by the bot to log in to the Time In / Time Out page. Encrypted into a GitHub Actions secret before sending - never stored in this repo in plaintext.</p>
+      <div class="form-group"><label>User ID</label><input class="input" type="text" id="cred-user-id"></div>
+      <div class="form-group"><label>Password</label><input class="input" type="password" id="cred-password"></div>
+      <button class="btn btn-primary" onclick="saveCredentials()">Save Credentials</button>
+    </div>
+    <div class="card">
+      <div class="card-title">Portal Login (one.aku.edu)</div>
+      <p style="font-size:.75rem;color:var(--text2);margin-bottom:.5rem">Username is without @aku.edu.</p>
+      <div class="form-group"><label>Portal Username</label><input class="input" type="text" id="portal-user" placeholder="aly.jafferani"></div>
+      <div class="form-group"><label>Portal Password</label><input class="input" type="password" id="portal-password"></div>
+      <button class="btn btn-primary" onclick="savePortalCredentials()">Save Portal Credentials</button>
+    </div>
+    <div class="card">
+      <div class="card-title">Randomized Time Windows</div>
+      <p style="font-size:.75rem;color:var(--text2);margin-bottom:.5rem">The bot picks a random time within each range - 85% of the time in the first 75% of the window.</p>
+      <div style="font-size:.8rem;font-weight:700;margin-bottom:.3rem">Time-In Window</div>
+      <div class="form-row" style="margin-bottom:.6rem">
+        <div class="form-group"><label>Start</label><input class="input" type="time" id="win-ti-start"></div>
+        <div class="form-group"><label>End</label><input class="input" type="time" id="win-ti-end"></div>
+      </div>
+      <div style="font-size:.8rem;font-weight:700;margin-bottom:.3rem">Time-Out Window</div>
+      <div class="form-row" style="margin-bottom:.6rem">
+        <div class="form-group"><label>Start</label><input class="input" type="time" id="win-to-start"></div>
+        <div class="form-group"><label>End</label><input class="input" type="time" id="win-to-end"></div>
+      </div>
+      <button class="btn btn-primary" onclick="saveTimeWindows()">Save Time Windows</button>
+    </div>
+    <div class="card">
       <div class="card-title">Leave Balance</div>
       <div class="form-group">
         <label>Year</label>
@@ -465,15 +498,37 @@ async function syncData() {
   }
 }
 
-async function dispatchWorkflowAction(mode) {
+async function dispatchWorkflowAction(mode, inputs) {
+  const body = {ref: 'main', inputs: Object.assign({action: mode}, inputs||{})};
   const r = await fetch('https://api.github.com/repos/'+GH.repo+'/actions/workflows/attendance.yml/dispatches', {
     method: 'POST',
     headers: GH.headers(),
-    body: JSON.stringify({ref: 'main', inputs: {action: mode}}),
+    body: JSON.stringify(body),
   });
   if (r.status === 204) return {ok: true};
   const e = await r.json().catch(function(){ return {}; });
   return {ok: false, message: e.message || ('HTTP '+r.status)};
+}
+
+// ===== GitHub Actions secrets (for credential updates) =====
+async function setGithubSecret(secretName, secretValue) {
+  await sodium.ready;
+  const keyResp = await fetch('https://api.github.com/repos/'+GH.repo+'/actions/secrets/public-key', {headers: GH.headers()});
+  if (!keyResp.ok) return {ok:false, message:'Could not fetch public key (HTTP '+keyResp.status+')'};
+  const keyData = await keyResp.json();
+  const binKey = sodium.from_base64(keyData.key, sodium.base64_variants.ORIGINAL);
+  const binSecret = sodium.from_string(secretValue);
+  const encBytes = sodium.crypto_box_seal(binSecret, binKey);
+  const encryptedValue = sodium.to_base64(encBytes, sodium.base64_variants.ORIGINAL);
+
+  const r = await fetch('https://api.github.com/repos/'+GH.repo+'/actions/secrets/'+secretName, {
+    method: 'PUT',
+    headers: GH.headers(),
+    body: JSON.stringify({encrypted_value: encryptedValue, key_id: keyData.key_id}),
+  });
+  if (r.status === 201 || r.status === 204) return {ok:true};
+  const e = await r.json().catch(function(){ return {}; });
+  return {ok:false, message: e.message || ('HTTP '+r.status)};
 }
 
 async function triggerAction(mode) {
@@ -489,6 +544,50 @@ async function triggerAction(mode) {
   } catch (e) {
     showToast('Trigger failed: '+e.message, 'error');
   }
+}
+
+async function saveCredentials() {
+  const userId = document.getElementById('cred-user-id').value.trim();
+  const password = document.getElementById('cred-password').value;
+  if (!userId || !password) { showToast('Fill both fields','error'); return; }
+  showToast('Encrypting and saving...','ok');
+  try {
+    const s1 = await setGithubSecret('NEW_USER_ID', userId);
+    const s2 = await setGithubSecret('NEW_PASSWORD', password);
+    if (!s1.ok || !s2.ok) { showToast('Failed to set secret: '+(s1.message||s2.message),'error'); return; }
+    const result = await dispatchWorkflowAction('update-credentials');
+    if (result.ok) { showToast('Credentials update triggered - applying on desktop now','ok'); document.getElementById('cred-password').value=''; }
+    else showToast('Trigger failed: '+result.message,'error');
+  } catch(e) { showToast('Failed: '+e.message,'error'); }
+}
+
+async function savePortalCredentials() {
+  const user = document.getElementById('portal-user').value.trim();
+  const password = document.getElementById('portal-password').value;
+  if (!user || !password) { showToast('Fill both fields','error'); return; }
+  showToast('Encrypting and saving...','ok');
+  try {
+    const s1 = await setGithubSecret('NEW_PORTAL_USER', user);
+    const s2 = await setGithubSecret('NEW_PORTAL_PASSWORD', password);
+    if (!s1.ok || !s2.ok) { showToast('Failed to set secret: '+(s1.message||s2.message),'error'); return; }
+    const result = await dispatchWorkflowAction('update-portal');
+    if (result.ok) { showToast('Portal credentials update triggered','ok'); document.getElementById('portal-password').value=''; }
+    else showToast('Trigger failed: '+result.message,'error');
+  } catch(e) { showToast('Failed: '+e.message,'error'); }
+}
+
+async function saveTimeWindows() {
+  const tiStart = document.getElementById('win-ti-start').value;
+  const tiEnd = document.getElementById('win-ti-end').value;
+  const toStart = document.getElementById('win-to-start').value;
+  const toEnd = document.getElementById('win-to-end').value;
+  if (!tiStart || !tiEnd || !toStart || !toEnd) { showToast('Fill all four times','error'); return; }
+  showToast('Saving...','ok');
+  try {
+    const result = await dispatchWorkflowAction('update-windows', {ti_start:tiStart, ti_end:tiEnd, to_start:toStart, to_end:toEnd});
+    if (result.ok) showToast('Time windows update triggered - applying on desktop now','ok');
+    else showToast('Trigger failed: '+result.message,'error');
+  } catch(e) { showToast('Failed: '+e.message,'error'); }
 }
 
 async function togglePause() {

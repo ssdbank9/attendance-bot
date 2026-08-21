@@ -11,6 +11,11 @@
 # Steps use PowerShell (not bash) - on this Windows runner, `shell: bash`
 # resolves to the WSL stub at C:\WINDOWS\system32\bash.EXE, not Git Bash,
 # and fails if no WSL distro is installed.
+#
+# Credentials/portal-password updates never appear as plain workflow inputs
+# (GitHub doesn't mask arbitrary inputs) - the dashboard encrypts them into
+# GitHub Actions secrets first (masked in logs, encrypted at rest), and this
+# workflow only ever reads them via ${{ secrets.* }}.
 
 name: Attendance Bot
 
@@ -23,9 +28,21 @@ on:
   workflow_dispatch:
     inputs:
       action:
-        description: 'Force action (timein/timeout/pause/resume), or leave as auto'
+        description: 'Force action (timein/timeout/pause/resume/update-credentials/update-portal/update-windows), or leave as auto'
         required: false
         default: 'auto'
+      ti_start:
+        description: 'Time-In window start HH:MM (action=update-windows only)'
+        required: false
+      ti_end:
+        description: 'Time-In window end HH:MM (action=update-windows only)'
+        required: false
+      to_start:
+        description: 'Time-Out window start HH:MM (action=update-windows only)'
+        required: false
+      to_end:
+        description: 'Time-Out window end HH:MM (action=update-windows only)'
+        required: false
 
 jobs:
   mark-attendance:
@@ -49,12 +66,28 @@ jobs:
 
       - name: Mark attendance
         shell: powershell
+        env:
+          NEW_USER_ID: ${{ secrets.NEW_USER_ID }}
+          NEW_PASSWORD: ${{ secrets.NEW_PASSWORD }}
+          NEW_PORTAL_USER: ${{ secrets.NEW_PORTAL_USER }}
+          NEW_PORTAL_PASSWORD: ${{ secrets.NEW_PORTAL_PASSWORD }}
+          TI_START: ${{ github.event.inputs.ti_start }}
+          TI_END: ${{ github.event.inputs.ti_end }}
+          TO_START: ${{ github.event.inputs.to_start }}
+          TO_END: ${{ github.event.inputs.to_end }}
         run: |
           $mode = "${{ steps.action.outputs.mode }}"
+          $base = "D:/DropBox/Self/Claude/Attendance Management"
           if ($mode -eq "pause") {
-            python "D:/DropBox/Self/Claude/Attendance Management/set_pause.py" true
+            python "$base/set_pause.py" true
           } elseif ($mode -eq "resume") {
-            python "D:/DropBox/Self/Claude/Attendance Management/set_pause.py" false
+            python "$base/set_pause.py" false
+          } elseif ($mode -eq "update-credentials") {
+            python "$base/apply_credentials.py"
+          } elseif ($mode -eq "update-portal") {
+            python "$base/apply_portal.py"
+          } elseif ($mode -eq "update-windows") {
+            python "$base/apply_windows.py"
           } else {
-            python "D:/DropBox/Self/Claude/Attendance Management/timein_bot.py" $mode ${{ steps.action.outputs.now_flag }}
+            python "$base/timein_bot.py" $mode ${{ steps.action.outputs.now_flag }}
           }
