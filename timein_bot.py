@@ -20,6 +20,7 @@ from datetime import datetime, timedelta
 from pathlib import Path
 
 from notify import notify, notify_status, notify_skip, notify_failure
+import attendance_db as db
 
 from selenium import webdriver
 from selenium.webdriver.edge.options import Options
@@ -75,51 +76,17 @@ def parse_time(t_str):
 
 
 def write_status(mode, status, message, action_time=None, date_str=None):
-    existing = {}
-    if STATUS_FILE.exists():
-        try:
-            with open(STATUS_FILE, "r") as f:
-                existing = json.load(f)
-        except Exception:
-            existing = {}
-
-    existing[mode] = {
-        "date": date_str or datetime.now().strftime("%Y-%m-%d"),
-        "status": status,
-        "message": message,
-        "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-    }
-    if action_time:
-        existing[mode]["action_time"] = action_time
-
-    with open(STATUS_FILE, "w") as f:
-        json.dump(existing, f, indent=2)
+    """Record an event in attendance.db (the single source of truth) and
+    have it regenerate timein_status.json/timein_history.json from there -
+    dashboard.py/cloud_sync.py/notify.py keep reading those files unchanged."""
+    day = date_str or datetime.now().strftime("%Y-%m-%d")
+    db.record_event(day, mode, status, message, action_time)
 
     try:
         from cloud_sync import sync_status
         sync_status()
     except Exception:
         pass
-
-    if status == "success" and action_time:
-        _log_history(mode, action_time, date_str)
-
-
-def _log_history(mode, action_time, date_str=None):
-    try:
-        if HISTORY_FILE.exists():
-            with open(HISTORY_FILE, "r") as f:
-                data = json.load(f)
-        else:
-            data = {"records": {}}
-    except Exception:
-        data = {"records": {}}
-    day = date_str or datetime.now().strftime("%Y-%m-%d")
-    if day not in data["records"]:
-        data["records"][day] = {}
-    data["records"][day][mode] = action_time
-    with open(HISTORY_FILE, "w") as f:
-        json.dump(data, f, indent=2)
 
 
 def is_holiday(today_str):
@@ -157,32 +124,18 @@ def is_working_weekend(date_str):
 
 def already_done(mode):
     """Check if this mode was already completed today."""
-    if not STATUS_FILE.exists():
-        return False, None
-    try:
-        with open(STATUS_FILE, "r") as f:
-            status = json.load(f)
-    except Exception:
-        return False, None
-    prev = status.get(mode, {})
     today_str = datetime.now().strftime("%Y-%m-%d")
-    if prev.get("date") == today_str and prev.get("status") == "success":
-        return True, prev.get("action_time", "?")
+    prev = db.get_latest(mode, today_str)
+    if prev and prev["status"] == "success":
+        return True, prev.get("action_time") or "?"
     return False, None
 
 
 def timein_done_today():
     """Check if time-in was successfully completed today."""
-    if not STATUS_FILE.exists():
-        return False
-    try:
-        with open(STATUS_FILE, "r") as f:
-            status = json.load(f)
-    except Exception:
-        return False
-    ti = status.get("timein", {})
     today_str = datetime.now().strftime("%Y-%m-%d")
-    return ti.get("date") == today_str and ti.get("status") == "success"
+    ti = db.get_latest("timein", today_str)
+    return bool(ti and ti["status"] == "success")
 
 
 def pending_prior_day_timein():
@@ -191,19 +144,12 @@ def pending_prior_day_timein():
     The AKU system just closes whatever session is currently open, regardless
     of which calendar day it's closed on - so a Time-Out attempt today should
     be allowed to complete a dangling Time-In from an earlier day."""
-    if not STATUS_FILE.exists():
-        return None
-    try:
-        with open(STATUS_FILE, "r") as f:
-            status = json.load(f)
-    except Exception:
-        return None
-    ti = status.get("timein", {})
-    to = status.get("timeout", {})
-    ti_date = ti.get("date", "")
     today_str = datetime.now().strftime("%Y-%m-%d")
-    if (ti.get("status") == "success" and ti_date and ti_date < today_str
-            and (to.get("date") != ti_date or to.get("status") != "success")):
+    ti = db.get_latest("timein")
+    to = db.get_latest("timeout")
+    ti_date = (ti or {}).get("date", "")
+    if (ti and ti["status"] == "success" and ti_date and ti_date < today_str
+            and (not to or to.get("date") != ti_date or to.get("status") != "success")):
         return ti_date
     return None
 

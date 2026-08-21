@@ -1,21 +1,16 @@
 {
-  "date": "2026-08-18",
-  "status": "success",
-  "message": "Time-In marked at 08:52:14",
-  "timein_time": "08:52:14",
-  "timestamp": "2026-08-18 10:50:48",
-  "timeout": {
-    "date": "2026-08-20",
-    "status": "success",
-    "message": "Time-Out marked at 20:05:00 (corrected - portal confirmed this succeeded; local record was wrong due to the response-parsing bug fixed on 2026-08-21)",
-    "timestamp": "2026-08-20 20:05:00",
-    "action_time": "20:05:00"
-  },
   "timein": {
     "date": "2026-08-21",
     "status": "success",
     "message": "Time-In marked at 09:19:54",
-    "timestamp": "2026-08-21 09:19:54",
+    "timestamp": "2026-08-21 19:11:48",
     "action_time": "09:19:54"
+  },
+  "timeout": {
+    "date": "2026-08-20",
+    "status": "success",
+    "message": "Migrated from history: timeout at 20:05:00",
+    "timestamp": "2026-08-21 19:11:48",
+    "action_time": "20:05:00"
   }
 }

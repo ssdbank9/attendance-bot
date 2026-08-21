@@ -10,6 +10,13 @@ __pycache__/
 timein_logs/
 *.log
 
+# Local attendance database - source of truth stays on the desktop;
+# timein_status.json/timein_history.json (regenerated from it) are what
+# gets synced instead.
+attendance.db
+attendance.db-*
+*.pre-migration-backup
+
 # Local HTML page and assets
 timein_page.html
 timein_page_files/
