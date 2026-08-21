@@ -1,82 +1,51 @@
-# AKU Attendance Bot - GitHub Actions (FREE)
+# AKU Attendance Bot - runs on a self-hosted runner (aku-desktop)
 #
-# SETUP:
-# 1. Create a FREE GitHub account at github.com (if you don't have one)
-# 2. Click "+" -> "New repository" -> Name: "attendance-bot" -> Private -> Create
-# 3. Click "Add file" -> "Create new file"
-# 4. Name: .github/workflows/attendance.yml
-# 5. Paste this entire file content
-# 6. Commit
-# 7. Go to Settings -> Secrets and variables -> Actions -> New repository secret
-#    - Name: AKU_USER_ID     Value: 214874
-#    - Name: AKU_PASSWORD     Value: Zeenat123v!Q
-# 8. Done! Runs automatically Mon-Fri.
-# 9. To test: Go to Actions tab -> "Attendance Bot" -> "Run workflow" -> Run
+# This workflow calls timein_bot.py directly on the runner machine, so all
+# scheduling logic (weekends, holidays, blackout days, pause state, retry/
+# fallback) lives in one place: timein_bot.py itself.
 #
-# HIERARCHY: GitHub fires FIRST (0-2 min delay), Desktop bot fires second (~5 min),
-# Google Script fires last (30-40 min delay). API handles duplicates gracefully.
+# The AKU API (portalservice.aku.edu) is a private-network address and is
+# NOT reachable from GitHub-hosted cloud runners - that's why this workflow
+# requires the self-hosted runner registered on the AKU-network desktop.
 
 name: Attendance Bot
 
 on:
   schedule:
-    # Time-In: 8:45 AM PKT = 3:45 AM UTC (Mon-Fri)
+    # Time-In window start: 8:45 AM PKT = 3:45 AM UTC (Mon-Fri)
     - cron: '45 3 * * 1-5'
-    # Time-Out: 8:00 PM PKT = 3:00 PM UTC (Mon-Fri)
+    # Time-Out window start: 8:00 PM PKT = 3:00 PM UTC (Mon-Fri)
     - cron: '0 15 * * 1-5'
   workflow_dispatch:
     inputs:
       action:
-        description: 'Force action (I=TimeIn, O=TimeOut)'
+        description: 'Force action (timein/timeout), or leave as auto'
         required: false
         default: 'auto'
 
 jobs:
   mark-attendance:
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, windows]
     steps:
       - name: Determine action
         id: action
+        shell: bash
         run: |
-          if [ "${{ github.event.inputs.action }}" != "" ] && [ "${{ github.event.inputs.action }}" != "auto" ]; then
-            echo "type=${{ github.event.inputs.action }}" >> $GITHUB_OUTPUT
-            echo "label=Manual" >> $GITHUB_OUTPUT
+          INPUT_ACTION="${{ github.event.inputs.action }}"
+          if [ -n "$INPUT_ACTION" ] && [ "$INPUT_ACTION" != "auto" ]; then
+            echo "mode=$INPUT_ACTION" >> "$GITHUB_OUTPUT"
+            echo "now_flag=--now" >> "$GITHUB_OUTPUT"
           else
             HOUR=$(TZ='Asia/Karachi' date +%H)
             if [ "$HOUR" -lt 12 ]; then
-              echo "type=I" >> $GITHUB_OUTPUT
-              echo "label=Time-In" >> $GITHUB_OUTPUT
+              echo "mode=timein" >> "$GITHUB_OUTPUT"
             else
-              echo "type=O" >> $GITHUB_OUTPUT
-              echo "label=Time-Out" >> $GITHUB_OUTPUT
+              echo "mode=timeout" >> "$GITHUB_OUTPUT"
             fi
+            echo "now_flag=" >> "$GITHUB_OUTPUT"
           fi
 
-      - name: Random delay (fires FIRST in hierarchy)
+      - name: Mark attendance
+        shell: bash
         run: |
-          if [ "${{ steps.action.outputs.type }}" = "I" ]; then
-            DELAY=$((RANDOM % 120))
-          else
-            DELAY=$((RANDOM % 300))
-          fi
-          echo "Sleeping ${DELAY}s (GitHub = primary, fires first)..."
-          sleep $DELAY
-
-      - name: Mark Attendance
-        run: |
-          RESPONSE=$(curl -s -X POST \
-            "https://portalservice.aku.edu/Service1.svc/json/TimeInTimeOut/" \
-            -H "Content-Type: application/json; charset=utf-8" \
-            -d "{\"_action\":\"${{ steps.action.outputs.type }}\",\"_userid\":\"${{ secrets.AKU_USER_ID }}\",\"_password\":\"${{ secrets.AKU_PASSWORD }}\"}")
-          
-          echo "${{ steps.action.outputs.label }} response: $RESPONSE"
-          
-          # Fail the job if response contains error
-          if echo "$RESPONSE" | grep -qi "invalid\|error"; then
-            if echo "$RESPONSE" | grep -qi "already"; then
-              echo "Already marked - OK"
-            else
-              echo "FAILED"
-              exit 1
-            fi
-          fi
+          python "D:/DropBox/Self/Claude/Attendance Management/timein_bot.py" ${{ steps.action.outputs.mode }} ${{ steps.action.outputs.now_flag }}

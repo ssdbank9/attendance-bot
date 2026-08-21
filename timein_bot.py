@@ -57,6 +57,12 @@ LABELS = {
     "timeout": "Time-Out",
 }
 
+# The direct AKU API (portalservice.aku.edu) is a private-network address and
+# is unreliable/unreachable off the AKU network. Selenium (driving the saved
+# portal page in a real browser) is the primary method; set this True to
+# re-enable the direct API attempts before falling back to Selenium.
+USE_DIRECT_API = False
+
 
 def load_config():
     with open(CONFIG_FILE, "r") as f:
@@ -68,7 +74,7 @@ def parse_time(t_str):
     return int(parts[0]), int(parts[1])
 
 
-def write_status(mode, status, message, action_time=None):
+def write_status(mode, status, message, action_time=None, date_str=None):
     existing = {}
     if STATUS_FILE.exists():
         try:
@@ -78,7 +84,7 @@ def write_status(mode, status, message, action_time=None):
             existing = {}
 
     existing[mode] = {
-        "date": datetime.now().strftime("%Y-%m-%d"),
+        "date": date_str or datetime.now().strftime("%Y-%m-%d"),
         "status": status,
         "message": message,
         "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
@@ -179,6 +185,29 @@ def timein_done_today():
     return ti.get("date") == today_str and ti.get("status") == "success"
 
 
+def pending_prior_day_timein():
+    """Return the date string (YYYY-MM-DD) of a prior day's Time-In that was
+    never matched by a successful Time-Out, or None if nothing is pending.
+    The AKU system just closes whatever session is currently open, regardless
+    of which calendar day it's closed on - so a Time-Out attempt today should
+    be allowed to complete a dangling Time-In from an earlier day."""
+    if not STATUS_FILE.exists():
+        return None
+    try:
+        with open(STATUS_FILE, "r") as f:
+            status = json.load(f)
+    except Exception:
+        return None
+    ti = status.get("timein", {})
+    to = status.get("timeout", {})
+    ti_date = ti.get("date", "")
+    today_str = datetime.now().strftime("%Y-%m-%d")
+    if (ti.get("status") == "success" and ti_date and ti_date < today_str
+            and (to.get("date") != ti_date or to.get("status") != "success")):
+        return ti_date
+    return None
+
+
 def should_run_today(mode):
     config = load_config()
     if config.get("paused", False):
@@ -270,12 +299,14 @@ def run_action(mode):
         if resp.status_code == 200:
             result = resp.json()
             message = result.get("TimeInTimeOutResult", "")
+            if isinstance(message, list):
+                message = message[0] if message else ""
             log.info("API response: %s", message)
 
             msg_lower = message.lower() if message else ""
             if not message:
                 return False, "API returned empty response"
-            if "invalid" in msg_lower:
+            if "invalid" in msg_lower or "does not exist" in msg_lower or "no time in information" in msg_lower:
                 return False, "API error: " + message
             if "error" in msg_lower and "already" not in msg_lower:
                 return False, "API error: " + message
@@ -290,6 +321,52 @@ def run_action(mode):
     except Exception as e:
         log.exception("%s API call failed", label)
         return False, str(e)
+
+
+def run_action_selenium(mode):
+    """Fallback: drive the saved portal HTML page in a real browser via Selenium,
+    same as the original approach, for use when the direct API call fails."""
+    config = load_config()
+    creds = config["credentials"]
+    user_id = creds["user_id"]
+    password = creds["password"]
+    label = LABELS[mode]
+    button_id = BUTTON_IDS[mode]
+
+    driver = None
+    try:
+        log.info("[%s] (Selenium fallback) Opening %s", label, HTML_FILE.as_uri())
+        options = Options()
+        options.add_argument("--disable-gpu")
+        driver = webdriver.Edge(options=options)
+        driver.get(HTML_FILE.as_uri())
+
+        wait = WebDriverWait(driver, 20)
+        user_field = wait.until(EC.presence_of_element_located((By.ID, "AKU_TL_DRIVED04_OPRID")))
+        user_field.clear()
+        user_field.send_keys(user_id)
+        log.info("Entered User ID")
+
+        pw_field = driver.find_element(By.ID, "AKU_TL_DRIVED04_OPERPSWD")
+        pw_field.clear()
+        pw_field.send_keys(password)
+        log.info("Entered Password")
+
+        button = wait.until(EC.element_to_be_clickable((By.ID, button_id)))
+        button.click()
+        log.info("Clicked %s", label)
+
+        time.sleep(3)
+        now = datetime.now().strftime("%H:%M:%S")
+        log.info("%s complete at %s (Selenium fallback)", label, now)
+        return True, now
+    except Exception as e:
+        log.exception("%s Selenium fallback failed", label)
+        return False, str(e)
+    finally:
+        if driver:
+            driver.quit()
+
 
 def main():
     mode = sys.argv[1] if len(sys.argv) > 1 else "timein"
@@ -313,34 +390,32 @@ def main():
             print(msg)
         return
 
-    if mode == "timein":
-        try:
-            with open(STATUS_FILE, "r") as f:
-                status = json.load(f)
-            ti = status.get("timein", {})
-            to = status.get("timeout", {})
-            ti_date = ti.get("date", "")
-            today_str = datetime.now().strftime("%Y-%m-%d")
-            if (ti.get("status") == "success" and ti_date < today_str
-                    and (to.get("date") != ti_date or to.get("status") != "success")):
-                missed_fmt = datetime.strptime(ti_date, "%Y-%m-%d").strftime("%d-%b-%Y")
-                msg = f"Cannot Time-In today: you haven't Timed-Out for {missed_fmt}"
-                log.info("=== %s - skipping ===", msg)
-                write_status(mode, "skipped", msg)
-                if now_flag:
-                    print(msg)
-                return
-        except Exception:
-            pass
+    catchup_date = None
 
-    if mode == "timeout" and not timein_done_today():
-        today_fmt = datetime.now().strftime("%d-%b-%Y")
-        msg = f"Cannot Time-Out: no Time-In recorded today {today_fmt}"
-        log.info("=== %s - skipping ===", msg)
-        write_status(mode, "skipped", msg)
-        if now_flag:
-            print(msg)
-        return
+    if mode == "timein":
+        pending_date = pending_prior_day_timein()
+        if pending_date:
+            missed_fmt = datetime.strptime(pending_date, "%Y-%m-%d").strftime("%d-%b-%Y")
+            msg = f"Cannot Time-In today: you haven't Timed-Out for {missed_fmt}"
+            log.info("=== %s - skipping ===", msg)
+            write_status(mode, "skipped", msg)
+            if now_flag:
+                print(msg)
+            return
+
+    if mode == "timeout":
+        catchup_date = pending_prior_day_timein()
+        if not timein_done_today() and not catchup_date:
+            today_fmt = datetime.now().strftime("%d-%b-%Y")
+            msg = f"Cannot Time-Out: no Time-In recorded today {today_fmt}"
+            log.info("=== %s - skipping ===", msg)
+            write_status(mode, "skipped", msg)
+            if now_flag:
+                print(msg)
+            return
+        if catchup_date:
+            missed_fmt = datetime.strptime(catchup_date, "%Y-%m-%d").strftime("%d-%b-%Y")
+            log.info("Completing pending Time-Out for %s before proceeding", missed_fmt)
 
     if not now_flag:
         if not should_run_today(mode):
@@ -361,14 +436,38 @@ def main():
     max_attempts = retry_cfg["max_attempts"]
     retry_delay = retry_cfg["delay_seconds"]
 
+    if USE_DIRECT_API:
+        for attempt in range(1, max_attempts + 1):
+            log.info("Attempt %d/%d (API)", attempt, max_attempts)
+            success, detail = run_action(mode)
+
+            if success:
+                msg = f"{label} marked at {detail}"
+                log.info(msg)
+                write_status(mode, "success", msg, action_time=detail)
+                notify_status(mode, detail)
+                log.info("=== Done ===")
+                return
+
+            log.warning("Attempt %d failed: %s", attempt, detail)
+            if attempt < max_attempts:
+                log.info("Retrying in %d seconds...", retry_delay)
+                time.sleep(retry_delay)
+
+        log.warning("API method exhausted after %d attempts - falling back to Selenium", max_attempts)
+
     for attempt in range(1, max_attempts + 1):
-        log.info("Attempt %d/%d", attempt, max_attempts)
-        success, detail = run_action(mode)
+        log.info("Attempt %d/%d (Selenium)", attempt, max_attempts)
+        success, detail = run_action_selenium(mode)
 
         if success:
-            msg = f"{label} marked at {detail}"
+            if catchup_date:
+                missed_fmt = datetime.strptime(catchup_date, "%Y-%m-%d").strftime("%d-%b-%Y")
+                msg = f"{label} marked at {detail} (completed pending {missed_fmt})"
+            else:
+                msg = f"{label} marked at {detail}"
             log.info(msg)
-            write_status(mode, "success", msg, action_time=detail)
+            write_status(mode, "success", msg, action_time=detail, date_str=catchup_date)
             notify_status(mode, detail)
             log.info("=== Done ===")
             return

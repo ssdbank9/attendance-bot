@@ -654,7 +654,13 @@ def action_timeout_now():
     status = load_json(STATUS_FILE)
     ti = status.get("timein", {})
     to = status.get("timeout", {})
-    if ti.get("date") != today or ti.get("status") != "success":
+    ti_date = ti.get("date", "")
+    timed_in_today = ti.get("date") == today and ti.get("status") == "success"
+    pending_prior_day = (
+        ti.get("status") == "success" and ti_date and ti_date < today
+        and (to.get("date") != ti_date or to.get("status") != "success")
+    )
+    if not timed_in_today and not pending_prior_day:
         today_fmt = datetime.now().strftime("%d-%b-%Y")
         return redirect(url_for("dashboard", msg=f"Cannot Time-Out: you haven't Timed-In today {today_fmt} yet"))
     if to.get("date") == today and to.get("status") == "success":
