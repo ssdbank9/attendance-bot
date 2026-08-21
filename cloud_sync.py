@@ -305,34 +305,6 @@ def push_all():
     log.info("Push all: %s", results)
     return results
 
-# ---- Google Apps Script ----
-
-def sync_google_script(user_id=None, password=None):
-    sync = get_sync_config().get("google_script", {})
-    url = sync.get("web_app_url", "").strip()
-    if not url:
-        return False, "Google Script not configured"
-
-    import requests
-    payload = {}
-    if user_id:
-        payload["user_id"] = user_id
-    if password:
-        payload["password"] = password
-    if not payload:
-        return True, "Nothing to sync"
-
-    try:
-        resp = requests.post(url, json=payload, timeout=15,
-                             headers={"Content-Type": "application/json"})
-        if resp.status_code == 200:
-            data = resp.json()
-            return True, data.get("message", "Updated")
-        return False, f"HTTP {resp.status_code}"
-    except Exception as e:
-        return False, str(e)
-
-
 # ---- Combined sync ----
 
 def sync_credentials(user_id=None, password=None):
@@ -342,10 +314,7 @@ def sync_credentials(user_id=None, password=None):
     gh_ok, gh_msg = sync_github_credentials(user_id, password)
     results["github"] = {"ok": gh_ok, "message": gh_msg}
 
-    gs_ok, gs_msg = sync_google_script(user_id, password)
-    results["google"] = {"ok": gs_ok, "message": gs_msg}
-
-    log.info("Cloud sync credentials: GitHub=%s, Google=%s", gh_msg, gs_msg)
+    log.info("Cloud sync credentials: GitHub=%s", gh_msg)
     return results
 
 

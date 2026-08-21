@@ -702,25 +702,15 @@ def action_update_cloud_sync():
         config["cloud_sync"] = {}
     gh_repo = request.form.get("gh_repo", "").strip()
     gh_token = request.form.get("gh_token", "").strip()
-    gs_url = request.form.get("gs_url", "").strip()
     config["cloud_sync"]["github"] = {
         "repo": gh_repo,
         "token": gh_token,
         "enabled": bool(gh_repo and gh_token),
     }
-    config["cloud_sync"]["google_script"] = {
-        "web_app_url": gs_url,
-        "enabled": bool(gs_url),
-    }
     save_json(CONFIG_FILE, config)
     from notify import notify
-    services = []
     if gh_repo and gh_token:
-        services.append("GitHub")
-    if gs_url:
-        services.append("Google Script")
-    if services:
-        notify(f"Cloud sync configured: {', '.join(services)}", title="Cloud Sync", tags="cloud")
+        notify("Cloud sync configured: GitHub", title="Cloud Sync", tags="cloud")
     return redirect(url_for("dashboard", msg="Cloud sync settings saved"))
 
 @app.route("/action/test-cloud-sync")
@@ -925,11 +915,10 @@ def dashboard():
         auto_refresh()
     except Exception:
         pass
-    try:
-        from cloud_sync import pull_from_cloud
-        pull_from_cloud()
-    except Exception:
-        pass
+    # Cloud pull is deliberately NOT automatic here - it's a remote-wins
+    # overwrite with no real conflict detection for most files, so doing it
+    # on every page load (including the 60s auto-refresh) could silently
+    # discard local changes. Use the "Sync Now" button for an explicit pull.
     status = load_json(STATUS_FILE)
     config = load_config()
     upcoming = get_upcoming_holidays()
@@ -1002,7 +991,6 @@ def dashboard():
         portal_pass=config.get("portal", {}).get("password", ""),
         gh_repo=config.get("cloud_sync", {}).get("github", {}).get("repo", ""),
         gh_token=config.get("cloud_sync", {}).get("github", {}).get("token", ""),
-        gs_url=config.get("cloud_sync", {}).get("google_script", {}).get("web_app_url", ""),
         paused_class="paused" if is_paused else "",
         pause_label="Resume Bot" if is_paused else "Pause Bot",
         pause_icon="&#9654;" if is_paused else "&#9208;",
@@ -1248,16 +1236,13 @@ body{{background:var(--bg);color:var(--text);font-family:-apple-system,system-ui
         <button type="submit" class="btn full" style="margin-top:.5rem">Save Leave Balance</button>
       </form>
       <p style="font-size:.75rem;color:var(--text2);margin-top:.6rem">Set your current remaining leaves. The bot deducts when you mark leave days.</p></div>
-    <div class="card"><div class="card-title">Cloud Sync (GitHub &amp; Google)</div>
-      <p style="font-size:.8rem;color:var(--text2);margin-bottom:.5rem">Connect cloud backups so password and timing changes sync automatically. Hierarchy: GitHub fires first, then Desktop bot, then Google Script.</p>
+    <div class="card"><div class="card-title">Cloud Sync (GitHub)</div>
+      <p style="font-size:.8rem;color:var(--text2);margin-bottom:.5rem">Connect GitHub so password and timing changes sync automatically. Hierarchy: GitHub Actions (self-hosted runner), then Desktop bot.</p>
       <form action="/action/update-cloud-sync" method="POST" class="cred-form">
-        <div style="font-size:.8rem;font-weight:700;margin-bottom:.3rem">GitHub Actions</div>
         <div class="form-row"><label for="gh_repo">Repo (owner/name)</label><input type="text" id="gh_repo" name="gh_repo" value="{gh_repo}" class="input" placeholder="username/attendance-bot"></div>
         <div class="form-row"><label for="gh_token">Personal Access Token</label>
           <div class="pw-wrap"><input type="password" id="gh_token" name="gh_token" value="{gh_token}" class="input" placeholder="ghp_...">
             <button type="button" class="btn sm outline" onclick="var p=document.getElementById('gh_token');p.type=p.type==='password'?'text':'password';this.textContent=p.type==='password'?'Show':'Hide'">Show</button></div></div>
-        <div style="font-size:.8rem;font-weight:700;margin:.6rem 0 .3rem">Google Apps Script</div>
-        <div class="form-row"><label for="gs_url">Web App URL</label><input type="text" id="gs_url" name="gs_url" value="{gs_url}" class="input" placeholder="https://script.google.com/macros/s/.../exec"></div>
         <button type="submit" class="btn full" style="margin-top:.5rem">Save Cloud Sync</button>
         <a class="btn full outline" href="/action/test-cloud-sync" style="margin-top:.3rem;display:block;text-align:center">Test Sync Now</a></form></div>
     <div class="card"><div class="card-title">Notification Preferences</div>
@@ -1575,7 +1560,12 @@ body{{background:var(--bg);color:var(--text);font-family:-apple-system,system-ui
     fetch(url).then(function(r){{return r.text()}}).then(function(){{
       showToast('Done','ok');
       if(el)el.classList.remove('ajax-loading');
-      _formDirty=false;setTimeout(function(){{location.reload()}},800)
+      // Only reload if nothing else on the page has unsaved input - an
+      // unrelated quick action (pause, skip, holiday toggle, etc.) should
+      // never wipe out something the user is mid-typing elsewhere.
+      if(!_formDirty&&!document.querySelector('input:focus,select:focus,textarea:focus')){{
+        setTimeout(function(){{location.reload()}},800)
+      }}
     }}).catch(function(){{
       showToast('Action failed','error');
       if(el)el.classList.remove('ajax-loading');
