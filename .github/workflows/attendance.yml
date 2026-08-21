@@ -33,7 +33,7 @@ jobs:
     steps:
       - name: Determine action
         id: action
-        shell: pwsh
+        shell: powershell
         run: |
           $inputAction = "${{ github.event.inputs.action }}"
           if ($inputAction -and $inputAction -ne "auto") {
@@ -48,6 +48,6 @@ jobs:
           Add-Content -Path $env:GITHUB_OUTPUT -Value "now_flag=$nowFlag"
 
       - name: Mark attendance
-        shell: pwsh
+        shell: powershell
         run: |
           python "D:/DropBox/Self/Claude/Attendance Management/timein_bot.py" ${{ steps.action.outputs.mode }} ${{ steps.action.outputs.now_flag }}
