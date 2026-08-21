@@ -23,7 +23,7 @@ on:
   workflow_dispatch:
     inputs:
       action:
-        description: 'Force action (timein/timeout), or leave as auto'
+        description: 'Force action (timein/timeout/pause/resume), or leave as auto'
         required: false
         default: 'auto'
 
@@ -50,4 +50,11 @@ jobs:
       - name: Mark attendance
         shell: powershell
         run: |
-          python "D:/DropBox/Self/Claude/Attendance Management/timein_bot.py" ${{ steps.action.outputs.mode }} ${{ steps.action.outputs.now_flag }}
+          $mode = "${{ steps.action.outputs.mode }}"
+          if ($mode -eq "pause") {
+            python "D:/DropBox/Self/Claude/Attendance Management/set_pause.py" true
+          } elseif ($mode -eq "resume") {
+            python "D:/DropBox/Self/Claude/Attendance Management/set_pause.py" false
+          } else {
+            python "D:/DropBox/Self/Claude/Attendance Management/timein_bot.py" $mode ${{ steps.action.outputs.now_flag }}
+          }

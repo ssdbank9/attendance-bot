@@ -144,10 +144,11 @@ select.input{appearance:none;background-image:url("data:image/svg+xml,%3Csvg xml
     <div class="card">
       <div class="card-title">Quick Actions</div>
       <p style="font-size:.75rem;color:var(--text2);margin-bottom:.6rem">Runs for real on your desktop via the self-hosted GitHub Actions runner - works from anywhere, no VPN needed.</p>
-      <div style="display:flex;gap:.5rem">
+      <div style="display:flex;gap:.5rem;margin-bottom:.5rem">
         <button class="btn btn-primary" style="flex:1" onclick="triggerAction('timein')">Time In Now</button>
         <button class="btn btn-outline" style="flex:1" onclick="triggerAction('timeout')">Time Out Now</button>
       </div>
+      <button class="btn full" id="pause-btn" onclick="togglePause()">Pause Bot</button>
     </div>
     <div class="card">
       <div class="card-title">Today's Status</div>
@@ -174,10 +175,39 @@ select.input{appearance:none;background-image:url("data:image/svg+xml,%3Csvg xml
       <div id="holidays-content"></div>
     </div>
     <div class="card">
-      <div class="card-title">Quick Skip</div>
+      <div class="card-title">Add Holiday</div>
       <div class="form-group">
         <label>Date</label>
+        <input class="input" type="date" id="hol-date">
+      </div>
+      <div class="form-group">
+        <label>Label</label>
+        <input class="input" type="text" id="hol-label" placeholder="e.g. Independence Day">
+      </div>
+      <div class="checkbox-row">
+        <input type="checkbox" id="hol-moon">
+        <label for="hol-moon">Moon-dependent (needs confirmation)</label>
+      </div>
+      <button class="btn btn-outline" onclick="addHoliday()">Add Holiday</button>
+    </div>
+    <div class="card">
+      <div class="card-title">Working Weekends</div>
+      <div id="working-weekends-content"></div>
+      <div class="form-group" style="margin-top:.5rem">
+        <label>Date</label>
+        <input class="input" type="date" id="ww-date">
+      </div>
+      <button class="btn btn-outline" onclick="addWorkingWeekend()">Mark as Working Day</button>
+    </div>
+    <div class="card">
+      <div class="card-title">Skip / Leave</div>
+      <div class="form-group">
+        <label>Start Date</label>
         <input class="input" type="date" id="skip-date">
+      </div>
+      <div class="form-group">
+        <label>End Date <span style="color:var(--text2);font-weight:400">(optional, for a range)</span></label>
+        <input class="input" type="date" id="skip-end-date">
       </div>
       <div class="form-group">
         <label>Reason</label>
@@ -196,6 +226,18 @@ select.input{appearance:none;background-image:url("data:image/svg+xml,%3Csvg xml
     <div class="card">
       <div class="card-title">Leave History</div>
       <div id="analytics-history"></div>
+    </div>
+    <div class="card">
+      <div class="card-title">Attendance Report</div>
+      <div class="form-row">
+        <div class="form-group"><label>Start</label><input class="input" type="date" id="rep-start"></div>
+        <div class="form-group"><label>End</label><input class="input" type="date" id="rep-end"></div>
+      </div>
+      <div style="display:flex;gap:.5rem;margin-bottom:.6rem">
+        <button class="btn btn-outline" style="flex:1" onclick="renderAttendanceReport()">Show</button>
+        <button class="btn btn-primary" style="flex:1" onclick="exportAttendanceCSV()">Export CSV</button>
+      </div>
+      <div id="report-content"></div>
     </div>
   </div>
 
@@ -325,7 +367,7 @@ const GH = {
 };
 
 // ===== App State =====
-let S = {blackout:{},holidays:{},balance:{},status:{},notifPrefs:{},shas:{}};
+let S = {blackout:{},holidays:{},balance:{},status:{},notifPrefs:{},history:{},botConfig:{},shas:{}};
 const NOTIF_PREF_LABELS = {
   timein_success: 'Time-In Success',
   timeout_success: 'Time-Out Success',
@@ -398,18 +440,22 @@ function disconnect() {
 async function syncData() {
   setSyncStatus('loading','Syncing...');
   try {
-    const [bl,hol,bal,st,np] = await Promise.all([
+    const [bl,hol,bal,st,np,hist,bc] = await Promise.all([
       GH.readFile('blackout.json'),
       GH.readFile('holidays.json'),
       GH.readFile('leave_balance.json'),
       GH.readFile('timein_status.json'),
       GH.readFile('notification_prefs.json'),
+      GH.readFile('timein_history.json'),
+      GH.readFile('bot_config.json'),
     ]);
     if (bl.content) { S.blackout = bl.content; S.shas.blackout = bl.sha; }
     if (hol.content) { S.holidays = hol.content; S.shas.holidays = hol.sha; }
     if (bal.content) { S.balance = bal.content; S.shas.balance = bal.sha; }
     if (st.content) { S.status = st.content; S.shas.status = st.sha; }
     if (np.content) { S.notifPrefs = np.content; S.shas.notifPrefs = np.sha; }
+    if (hist.content) { S.history = hist.content; S.shas.history = hist.sha; }
+    if (bc.content) { S.botConfig = bc.content; S.shas.botConfig = bc.sha; }
     localStorage.setItem(CACHE_KEY, JSON.stringify(S));
     setSyncStatus('ok','Synced');
     renderAll();
@@ -419,23 +465,48 @@ async function syncData() {
   }
 }
 
+async function dispatchWorkflowAction(mode) {
+  const r = await fetch('https://api.github.com/repos/'+GH.repo+'/actions/workflows/attendance.yml/dispatches', {
+    method: 'POST',
+    headers: GH.headers(),
+    body: JSON.stringify({ref: 'main', inputs: {action: mode}}),
+  });
+  if (r.status === 204) return {ok: true};
+  const e = await r.json().catch(function(){ return {}; });
+  return {ok: false, message: e.message || ('HTTP '+r.status)};
+}
+
 async function triggerAction(mode) {
   const label = mode==='timein' ? 'Time-In' : 'Time-Out';
   showToast('Dispatching '+label+'...', 'ok');
   try {
-    const r = await fetch('https://api.github.com/repos/'+GH.repo+'/actions/workflows/attendance.yml/dispatches', {
-      method: 'POST',
-      headers: GH.headers(),
-      body: JSON.stringify({ref: 'main', inputs: {action: mode}}),
-    });
-    if (r.status === 204) {
+    const result = await dispatchWorkflowAction(mode);
+    if (result.ok) {
       showToast(label+' triggered - running on your desktop now (takes ~10-30s)', 'ok');
     } else {
-      const e = await r.json().catch(function(){ return {}; });
-      showToast('Trigger failed: '+(e.message || ('HTTP '+r.status)), 'error');
+      showToast('Trigger failed: '+result.message, 'error');
     }
   } catch (e) {
     showToast('Trigger failed: '+e.message, 'error');
+  }
+}
+
+async function togglePause() {
+  const paused = (S.botConfig||{}).paused;
+  const mode = paused ? 'resume' : 'pause';
+  showToast((paused?'Resuming':'Pausing')+' bot...', 'ok');
+  try {
+    const result = await dispatchWorkflowAction(mode);
+    if (result.ok) {
+      S.botConfig = {paused: !paused};
+      localStorage.setItem(CACHE_KEY, JSON.stringify(S));
+      renderStatus();
+      showToast(paused?'Bot resumed':'Bot paused', 'ok');
+    } else {
+      showToast('Failed: '+result.message, 'error');
+    }
+  } catch (e) {
+    showToast('Failed: '+e.message, 'error');
   }
 }
 
@@ -461,8 +532,24 @@ function renderAll() {
   renderForecast();
   renderSkips();
   renderHolidays();
+  renderWorkingWeekends();
   renderAnalytics();
   renderSettings();
+}
+
+function renderWorkingWeekends() {
+  const el = document.getElementById('working-weekends-content');
+  const ww = ((S.blackout||{}).working_weekends||[]).filter(function(d){return d>=today()}).sort();
+  if (!ww.length) { el.innerHTML='<div class="empty">None marked</div>'; return; }
+  let h = '';
+  ww.forEach(function(d){
+    const dt = new Date(d+'T12:00:00');
+    const dayStr = ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'][dt.getDay()];
+    const monthStr = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'][dt.getMonth()];
+    h += '<div class="skip-item"><div class="skip-date">'+dayStr+' '+monthStr+' '+dt.getDate()+'</div>'
+      +'<button class="btn btn-sm btn-danger" onclick="removeWorkingWeekend(\''+d+'\')">Undo</button></div>';
+  });
+  el.innerHTML = h;
 }
 
 function renderStatus() {
@@ -476,6 +563,11 @@ function renderStatus() {
   const toDate = to.date||'';
   el.innerHTML = '<div class="status-item"><div class="status-label">Time-In</div><div class="status-value">'+tiTime+'</div><div class="status-sub">'+tiDate+'</div></div>'
     +'<div class="status-item"><div class="status-label">Time-Out</div><div class="status-value">'+toTime+'</div><div class="status-sub">'+toDate+'</div></div>';
+
+  const paused = (S.botConfig||{}).paused;
+  const pauseBtn = document.getElementById('pause-btn');
+  pauseBtn.textContent = paused ? 'Resume Bot' : 'Pause Bot';
+  pauseBtn.className = paused ? 'btn full btn-primary' : 'btn full btn-danger';
 }
 
 function renderBalance() {
@@ -553,13 +645,20 @@ function renderSkips() {
     h += '<div class="skip-item"><div><div class="skip-info">'+d.reason+daysLabel+'</div><div class="skip-date">'+dayStr+' '+monthStr+' '+dt.getDate()+'</div></div>'
       +'<button class="btn btn-sm btn-danger" onclick="cancelSkip(\''+d.date+'\')">Cancel</button></div>';
   });
-  el.innerHTML = h;
+  const ranges = ((S.blackout||{}).ranges||[]).filter(function(r){return r.end>=today()});
+  ranges.sort(function(a,b){return a.start.localeCompare(b.start)});
+  ranges.forEach(function(r){
+    h += '<div class="skip-item"><div><div class="skip-info">'+r.reason+'</div><div class="skip-date">'+r.start+' to '+r.end+'</div></div>'
+      +'<button class="btn btn-sm btn-danger" onclick="cancelRange(\''+r.start+'\',\''+r.end+'\')">Cancel</button></div>';
+  });
+  if (!dates.length && !ranges.length) { el.innerHTML='<div class="empty">No active leaves or skips</div>'; }
+  else { el.innerHTML = h; }
 }
 
 function renderHolidays() {
   const el = document.getElementById('holidays-content');
   const td = today();
-  const hols = ((S.holidays||{}).holidays||[]).filter(function(h){return h.date>=td&&!h.disabled}).sort(function(a,b){return a.date.localeCompare(b.date)}).slice(0,8);
+  const hols = ((S.holidays||{}).holidays||[]).filter(function(h){return h.date>=td}).sort(function(a,b){return a.date.localeCompare(b.date)}).slice(0,10);
   if (!hols.length) { el.innerHTML='<div class="empty">No upcoming holidays</div>'; return; }
   let h = '';
   hols.forEach(function(ho){
@@ -567,7 +666,16 @@ function renderHolidays() {
     const dayStr = ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'][dt.getDay()];
     const monthStr = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'][dt.getMonth()];
     const moon = ho.moon_dependent?' \u263D':'';
-    h += '<div class="hol-item"><strong>'+ho.label+'</strong>'+moon+'<div class="hol-date">'+dayStr+' '+monthStr+' '+dt.getDate()+', '+dt.getFullYear()+'</div></div>';
+    const disabled = ho.disabled?' <span style="color:var(--red)">(disabled)</span>':'';
+    const needsConfirm = ho.moon_dependent && !ho.confirmed;
+    h += '<div class="hol-item"><strong>'+ho.label+'</strong>'+moon+disabled
+      +'<div class="hol-date">'+dayStr+' '+monthStr+' '+dt.getDate()+', '+dt.getFullYear()+'</div>'
+      +'<div style="display:flex;gap:.4rem;margin-top:.4rem;flex-wrap:wrap">'
+      +(needsConfirm?'<button class="btn btn-sm" onclick="confirmHoliday(\''+ho.date+'\')">Confirm</button>':'')
+      +'<button class="btn btn-sm btn-outline" onclick="shiftHoliday(\''+ho.date+'\',-1)">-1 Day</button>'
+      +'<button class="btn btn-sm btn-outline" onclick="shiftHoliday(\''+ho.date+'\',1)">+1 Day</button>'
+      +'<button class="btn btn-sm '+(ho.disabled?'':'btn-danger')+'" onclick="toggleHoliday(\''+ho.date+'\')">'+(ho.disabled?'Enable':'Disable')+'</button>'
+      +'</div></div>';
   });
   el.innerHTML = h;
 }
@@ -593,6 +701,91 @@ function renderAnalytics() {
     h += '<div class="history-item">'+l.date+' \u2014 '+l.reason+daysLbl+'</div>';
   });
   el2.innerHTML = h;
+}
+
+const TARGET_HOURS = 550/60; // 9h 10m, matches the local dashboard's target
+
+function computeHoursWorked(ti, to) {
+  // Mirrors dashboard.py's compute_hours_worked(): returns null instead of
+  // a bogus negative/huge value for auto-completed catch-up Time-Outs,
+  // where the recorded clock-time can be earlier than the Time-In's.
+  if (!ti || !to) return null;
+  const tp = ti.split(':'), op = to.split(':');
+  const tiMin = parseInt(tp[0])*60+parseInt(tp[1]);
+  const toMin = parseInt(op[0])*60+parseInt(op[1]);
+  const hours = Math.round(((toMin-tiMin)/60)*100)/100;
+  if (hours <= 0 || hours > 20) return null;
+  return hours;
+}
+
+function getReportRange() {
+  let start = document.getElementById('rep-start').value;
+  let end = document.getElementById('rep-end').value;
+  if (!start || !end) {
+    const now = new Date();
+    end = now.toISOString().slice(0,10);
+    const weekAgo = new Date(now); weekAgo.setDate(weekAgo.getDate()-7);
+    start = weekAgo.toISOString().slice(0,10);
+    document.getElementById('rep-start').value = start;
+    document.getElementById('rep-end').value = end;
+  }
+  return [start, end];
+}
+
+function buildReportRows() {
+  const [start, end] = getReportRange();
+  const records = (S.history||{}).records||{};
+  const rows = [];
+  let d = new Date(start+'T12:00:00');
+  const endD = new Date(end+'T12:00:00');
+  const dayNames = ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'];
+  while (d <= endD) {
+    const ds = d.toISOString().slice(0,10);
+    const rec = records[ds] || {};
+    if (rec.timein || rec.timeout) {
+      const hours = computeHoursWorked(rec.timein, rec.timeout);
+      rows.push({date:ds, day:dayNames[d.getDay()], timein:rec.timein||'-', timeout:rec.timeout||'-', hours:hours});
+    }
+    d.setDate(d.getDate()+1);
+  }
+  return rows;
+}
+
+function renderAttendanceReport() {
+  const rows = buildReportRows();
+  const el = document.getElementById('report-content');
+  if (!rows.length) { el.innerHTML = '<div class="empty">No records in this range</div>'; return; }
+  let h = '<div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse;font-size:.8rem">'
+    +'<tr><th style="text-align:left;padding:.3rem">Date</th><th style="text-align:left;padding:.3rem">Time-In</th><th style="text-align:left;padding:.3rem">Time-Out</th><th style="text-align:right;padding:.3rem">Hours</th></tr>';
+  rows.forEach(function(r){
+    h += '<tr><td style="padding:.3rem">'+r.day+' '+r.date+'</td><td style="padding:.3rem">'+r.timein+'</td><td style="padding:.3rem">'+r.timeout+'</td><td style="padding:.3rem;text-align:right">'+(r.hours!=null?r.hours.toFixed(2):'N/A')+'</td></tr>';
+  });
+  h += '</table></div>';
+  el.innerHTML = h;
+}
+
+function exportAttendanceCSV() {
+  const rows = buildReportRows();
+  const [start, end] = getReportRange();
+  let csv = 'Date,Day,Time-In,Time-Out,Hours Worked,Target (9h10m),Overtime/Under\n';
+  rows.forEach(function(r){
+    let diffStr = '';
+    let hoursStr = '';
+    if (r.hours != null) {
+      hoursStr = r.hours.toFixed(2);
+      const diff = Math.round((r.hours - TARGET_HOURS)*100)/100;
+      diffStr = diff >= 0 ? ('+'+diff) : String(diff);
+    } else if (r.timein !== '-' && r.timeout !== '-') {
+      hoursStr = 'N/A';
+    }
+    csv += [r.date, r.day, r.timein, r.timeout, hoursStr, '9.17', diffStr].join(',') + '\n';
+  });
+  const blob = new Blob([csv], {type:'text/csv'});
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url; a.download = 'timein_report_'+start+'_to_'+end+'.csv';
+  document.body.appendChild(a); a.click(); a.remove();
+  URL.revokeObjectURL(url);
 }
 
 function renderSettings() {
@@ -737,24 +930,148 @@ async function cancelSkip(date) {
 }
 
 async function addSkip() {
-  const date = document.getElementById('skip-date').value;
+  let start = document.getElementById('skip-date').value;
+  let end = document.getElementById('skip-end-date').value || start;
   const reason = document.getElementById('skip-reason').value.trim()||'Manual skip';
-  if (!date) { showToast('Select a date','error'); return; }
-  const existing = (S.blackout.dates||[]).find(function(d){return d.date===date});
-  if (existing) { showToast('Date already blocked','error'); return; }
+  if (!start) { showToast('Select a date','error'); return; }
+  if (start > end) { const t=start; start=end; end=t; }
 
   if (!S.blackout.dates) S.blackout.dates = [];
-  S.blackout.dates.push({date:date, reason:reason, added:new Date().toISOString().slice(0,16).replace('T',' ')});
-  S.blackout.dates.sort(function(a,b){return a.date.localeCompare(b.date)});
+  if (!S.blackout.ranges) S.blackout.ranges = [];
+
+  if (start === end) {
+    const existing = S.blackout.dates.find(function(d){return d.date===start});
+    if (existing) { showToast('Date already blocked','error'); return; }
+    S.blackout.dates.push({date:start, reason:reason, added:new Date().toISOString().slice(0,16).replace('T',' ')});
+    S.blackout.dates.sort(function(a,b){return a.date.localeCompare(b.date)});
+  } else {
+    const existing = S.blackout.ranges.find(function(r){return r.start===start && r.end===end});
+    if (existing) { showToast('Range already added','error'); return; }
+    S.blackout.ranges.push({start:start, end:end, reason:reason, added:new Date().toISOString().slice(0,16).replace('T',' ')});
+    S.blackout.ranges.sort(function(a,b){return a.start.localeCompare(b.start)});
+  }
 
   showToast('Adding skip...','ok');
-  const r = await GH.writeFile('blackout.json', S.blackout, S.shas.blackout, 'Skip '+date+': '+reason+' (mobile)');
+  const r = await GH.writeFile('blackout.json', S.blackout, S.shas.blackout, 'Skip '+start+(end!==start?' to '+end:'')+': '+reason+' (mobile)');
   if (r.ok) S.shas.blackout = r.sha;
   localStorage.setItem(CACHE_KEY, JSON.stringify(S));
   renderAll();
   document.getElementById('skip-date').value='';
+  document.getElementById('skip-end-date').value='';
   document.getElementById('skip-reason').value='';
-  showToast('Skip added for '+date,'ok');
+  showToast('Skip added for '+start+(end!==start?' to '+end:''),'ok');
+}
+
+async function cancelRange(start, end) {
+  if (!confirm('Cancel leave from '+start+' to '+end+'?')) return;
+  S.blackout.ranges = (S.blackout.ranges||[]).filter(function(r){return !(r.start===start && r.end===end)});
+  showToast('Cancelling...','ok');
+  const r = await GH.writeFile('blackout.json', S.blackout, S.shas.blackout, 'Cancel range '+start+' to '+end+' (mobile)');
+  if (r.ok) S.shas.blackout = r.sha;
+  localStorage.setItem(CACHE_KEY, JSON.stringify(S));
+  renderAll();
+  showToast('Range cancelled','ok');
+}
+
+async function addWorkingWeekend() {
+  const date = document.getElementById('ww-date').value;
+  if (!date) { showToast('Select a date','error'); return; }
+  if (!S.blackout.working_weekends) S.blackout.working_weekends = [];
+  if (S.blackout.working_weekends.indexOf(date) === -1) {
+    S.blackout.working_weekends.push(date);
+    S.blackout.working_weekends.sort();
+  }
+  showToast('Saving...','ok');
+  const r = await GH.writeFile('blackout.json', S.blackout, S.shas.blackout, 'Working weekend added: '+date+' (mobile)');
+  if (r.ok) S.shas.blackout = r.sha;
+  localStorage.setItem(CACHE_KEY, JSON.stringify(S));
+  renderAll();
+  document.getElementById('ww-date').value='';
+  showToast('Working weekend added','ok');
+}
+
+async function removeWorkingWeekend(date) {
+  S.blackout.working_weekends = (S.blackout.working_weekends||[]).filter(function(d){return d!==date});
+  showToast('Saving...','ok');
+  const r = await GH.writeFile('blackout.json', S.blackout, S.shas.blackout, 'Working weekend removed: '+date+' (mobile)');
+  if (r.ok) S.shas.blackout = r.sha;
+  localStorage.setItem(CACHE_KEY, JSON.stringify(S));
+  renderAll();
+  showToast('Working weekend removed','ok');
+}
+
+const LINKED_HOLIDAY_PREFIXES = ['Eid ul-Fitr', 'Eid ul-Adha', 'Ashura'];
+function getLinkedPrefix(label) {
+  for (const p of LINKED_HOLIDAY_PREFIXES) { if (label.startsWith(p)) return p; }
+  return null;
+}
+
+async function addHoliday() {
+  const date = document.getElementById('hol-date').value;
+  const label = document.getElementById('hol-label').value.trim();
+  const moon = document.getElementById('hol-moon').checked;
+  if (!date || !label) { showToast('Date and label required','error'); return; }
+  if (!S.holidays.holidays) S.holidays.holidays = [];
+  if (S.holidays.holidays.find(function(h){return h.date===date})) { showToast('Date already has a holiday','error'); return; }
+  const entry = {date:date, label:label, confirmed: !moon};
+  if (moon) entry.moon_dependent = true;
+  S.holidays.holidays.push(entry);
+  S.holidays.holidays.sort(function(a,b){return a.date.localeCompare(b.date)});
+  showToast('Saving...','ok');
+  const r = await GH.writeFile('holidays.json', S.holidays, S.shas.holidays, 'Holiday added: '+date+' - '+label+' (mobile)');
+  if (r.ok) S.shas.holidays = r.sha;
+  localStorage.setItem(CACHE_KEY, JSON.stringify(S));
+  renderAll();
+  document.getElementById('hol-date').value='';
+  document.getElementById('hol-label').value='';
+  document.getElementById('hol-moon').checked=false;
+  showToast('Holiday added','ok');
+}
+
+async function confirmHoliday(date) {
+  const h = (S.holidays.holidays||[]).find(function(x){return x.date===date});
+  if (!h) return;
+  h.confirmed = true;
+  showToast('Saving...','ok');
+  const r = await GH.writeFile('holidays.json', S.holidays, S.shas.holidays, 'Holiday confirmed: '+date+' (mobile)');
+  if (r.ok) S.shas.holidays = r.sha;
+  localStorage.setItem(CACHE_KEY, JSON.stringify(S));
+  renderAll();
+  showToast('Holiday confirmed','ok');
+}
+
+async function toggleHoliday(date) {
+  const h = (S.holidays.holidays||[]).find(function(x){return x.date===date});
+  if (!h) return;
+  h.disabled = !h.disabled;
+  showToast('Saving...','ok');
+  const r = await GH.writeFile('holidays.json', S.holidays, S.shas.holidays, 'Holiday '+(h.disabled?'disabled':'enabled')+': '+date+' (mobile)');
+  if (r.ok) S.shas.holidays = r.sha;
+  localStorage.setItem(CACHE_KEY, JSON.stringify(S));
+  renderAll();
+  showToast(h.disabled?'Holiday disabled':'Holiday enabled','ok');
+}
+
+async function shiftHoliday(date, offset) {
+  const target = (S.holidays.holidays||[]).find(function(x){return x.date===date});
+  if (!target) return;
+  const groupPrefix = getLinkedPrefix(target.label||'');
+  (S.holidays.holidays||[]).forEach(function(h){
+    const shouldShift = (h.date===date) || (groupPrefix && (h.label||'').startsWith(groupPrefix));
+    if (shouldShift) {
+      const d = new Date(h.date+'T12:00:00');
+      d.setDate(d.getDate()+offset);
+      h.date = d.toISOString().slice(0,10);
+      if (!h.moon_dependent) h.confirmed = true;
+    }
+  });
+  S.holidays.holidays.sort(function(a,b){return a.date.localeCompare(b.date)});
+  showToast('Saving...','ok');
+  const r = await GH.writeFile('holidays.json', S.holidays, S.shas.holidays, 'Holiday shifted: '+target.label+' by '+(offset>0?'+':'')+offset+' day (mobile)');
+  if (r.ok) S.shas.holidays = r.sha;
+  localStorage.setItem(CACHE_KEY, JSON.stringify(S));
+  renderAll();
+  showToast('Holiday shifted','ok');
 }
 
 async function saveBalance() {
