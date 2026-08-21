@@ -20,6 +20,7 @@ STATUS_FILE = BASE_DIR / "timein_status.json"
 HOLIDAYS_FILE = BASE_DIR / "holidays.json"
 BLACKOUT_FILE = BASE_DIR / "blackout.json"
 HISTORY_FILE = BASE_DIR / "timein_history.json"
+NOTIF_PREFS_FILE = BASE_DIR / "notification_prefs.json"
 
 app = Flask(__name__)
 
@@ -63,6 +64,18 @@ def save_json(path, data):
 
 def load_config():
     return load_json(CONFIG_FILE)
+
+
+def load_notif_prefs():
+    return load_json(NOTIF_PREFS_FILE)
+
+
+def _sync_notif_prefs_to_cloud():
+    try:
+        from cloud_sync import sync_notification_prefs
+        sync_notification_prefs()
+    except Exception:
+        pass
 
 
 def get_next_workdays(n=5):
@@ -169,8 +182,7 @@ def _sync_blackout_to_cloud():
 
 
 def should_notify_holiday_change():
-    config = load_config()
-    return config.get("notifications", {}).get("preferences", {}).get("holiday_change", True)
+    return load_notif_prefs().get("preferences", {}).get("holiday_change", True)
 
 
 def get_linked_prefix(label):
@@ -670,17 +682,18 @@ def action_timeout_now():
 
 @app.route("/action/update-notifications", methods=["POST"])
 def action_update_notifications():
-    config = load_config()
-    prefs = config.get("notifications", {}).get("preferences", {})
+    notif_prefs = load_notif_prefs()
+    prefs = notif_prefs.get("preferences", {})
     all_keys = ["timein_success", "timeout_success", "skip_day", "failure",
                 "tomorrow_plan", "tomorrow_holiday", "holiday_reminder", "deadman_switch", "holiday_change"]
     for key in all_keys:
         prefs[key] = request.form.get(key) == "on"
     admin_email = request.form.get("admin_email", "").strip()
-    config["notifications"]["preferences"] = prefs
-    config["notifications"]["admin_email"] = admin_email
-    save_json(CONFIG_FILE, config)
-    return redirect(url_for("dashboard", msg="Notification settings saved"))
+    notif_prefs["preferences"] = prefs
+    notif_prefs["admin_email"] = admin_email
+    save_json(NOTIF_PREFS_FILE, notif_prefs)
+    _sync_notif_prefs_to_cloud()
+    return redirect(url_for("dashboard", msg="Notification settings saved + synced to cloud"))
 
 @app.route("/action/update-cloud-sync", methods=["POST"])
 def action_update_cloud_sync():
@@ -881,9 +894,10 @@ def render_leave_balance(lb):
     return "\n".join(rows)
 
 
-def render_notif_prefs(config):
-    prefs = config.get("notifications", {}).get("preferences", {})
-    admin_email = config.get("notifications", {}).get("admin_email", "")
+def render_notif_prefs():
+    notif_prefs = load_notif_prefs()
+    prefs = notif_prefs.get("preferences", {})
+    admin_email = notif_prefs.get("admin_email", "")
     labels = {
         "timein_success": "Time-In Success",
         "timeout_success": "Time-Out Success",
@@ -933,7 +947,7 @@ def dashboard():
     to = status.get("timeout", {})
     ti_done = ti.get("date") == today and ti.get("status") == "success"
     to_done = to.get("date") == today and to.get("status") == "success"
-    notif_rows, admin_email = render_notif_prefs(config)
+    notif_rows, admin_email = render_notif_prefs()
     ti_failed = ti.get("date") == today and ti.get("status") == "failed"
     to_failed = to.get("date") == today and to.get("status") == "failed"
     admin_first = admin_email.split("@")[0].split(".")[0].capitalize() if admin_email else "Admin"

@@ -233,6 +233,15 @@ select.input{appearance:none;background-image:url("data:image/svg+xml,%3Csvg xml
       <button class="btn btn-primary" onclick="saveBalance()">Save Leave Balance</button>
     </div>
     <div class="card">
+      <div class="card-title">Notifications</div>
+      <div id="notif-prefs-content"></div>
+      <div class="form-group" style="margin-top:.6rem">
+        <label>Admin Email (for correction requests)</label>
+        <input class="input" type="email" id="set-admin-email" placeholder="admin@company.com">
+      </div>
+      <button class="btn btn-primary" onclick="saveNotifPrefs()">Save Notification Settings</button>
+    </div>
+    <div class="card">
       <div class="card-title">About</div>
       <p style="font-size:.8rem;color:var(--text2)">Attendance Bot Mobile Dashboard. Syncs with your desktop bot via GitHub. Changes here are reflected on all devices.</p>
       <p style="font-size:.7rem;color:var(--text2);margin-top:.4rem">Data stored locally + GitHub &bull; No server required</p>
@@ -308,7 +317,18 @@ const GH = {
 };
 
 // ===== App State =====
-let S = {blackout:{},holidays:{},balance:{},status:{},shas:{}};
+let S = {blackout:{},holidays:{},balance:{},status:{},notifPrefs:{},shas:{}};
+const NOTIF_PREF_LABELS = {
+  timein_success: 'Time-In Success',
+  timeout_success: 'Time-Out Success',
+  skip_day: 'Skip Day',
+  failure: 'Failure Alert',
+  tomorrow_plan: "Tomorrow's Plan",
+  tomorrow_holiday: 'Holiday Tomorrow',
+  holiday_reminder: 'Holiday Reminder (3-day)',
+  deadman_switch: "Dead Man's Switch",
+  holiday_change: 'Holiday Changes',
+};
 const CACHE_KEY = 'att_cache';
 const today = () => new Date().toISOString().slice(0,10);
 const fmt = v => v===Math.floor(v)?Math.floor(v):v;
@@ -370,16 +390,18 @@ function disconnect() {
 async function syncData() {
   setSyncStatus('loading','Syncing...');
   try {
-    const [bl,hol,bal,st] = await Promise.all([
+    const [bl,hol,bal,st,np] = await Promise.all([
       GH.readFile('blackout.json'),
       GH.readFile('holidays.json'),
       GH.readFile('leave_balance.json'),
       GH.readFile('timein_status.json'),
+      GH.readFile('notification_prefs.json'),
     ]);
     if (bl.content) { S.blackout = bl.content; S.shas.blackout = bl.sha; }
     if (hol.content) { S.holidays = hol.content; S.shas.holidays = hol.sha; }
     if (bal.content) { S.balance = bal.content; S.shas.balance = bal.sha; }
     if (st.content) { S.status = st.content; S.shas.status = st.sha; }
+    if (np.content) { S.notifPrefs = np.content; S.shas.notifPrefs = np.sha; }
     localStorage.setItem(CACHE_KEY, JSON.stringify(S));
     setSyncStatus('ok','Synced');
     renderAll();
@@ -558,6 +580,14 @@ function renderSettings() {
   document.getElementById('set-er').value = (lb.earned||{}).remaining||23;
   document.getElementById('set-cfl').value = ((lb.earned||{}).carry_forward_limit)||5;
   document.getElementById('set-cf').value = (lb.earned||{}).carried_forward||0;
+
+  const prefs = (S.notifPrefs||{}).preferences||{};
+  const rows = Object.keys(NOTIF_PREF_LABELS).map(key => {
+    const checked = prefs[key]!==false ? ' checked' : '';
+    return '<div class="checkbox-row"><input type="checkbox" id="np-'+key+'"'+checked+'><label for="np-'+key+'">'+NOTIF_PREF_LABELS[key]+'</label></div>';
+  });
+  document.getElementById('notif-prefs-content').innerHTML = rows.join('\n');
+  document.getElementById('set-admin-email').value = (S.notifPrefs||{}).admin_email||'';
 }
 
 // ===== Actions =====
@@ -719,6 +749,21 @@ async function saveBalance() {
   localStorage.setItem(CACHE_KEY, JSON.stringify(S));
   renderAll();
   showToast(r.ok?'Leave balance saved':'Save failed','ok');
+}
+
+async function saveNotifPrefs() {
+  const np = S.notifPrefs && Object.keys(S.notifPrefs).length ? S.notifPrefs : {preferences:{}};
+  if (!np.preferences) np.preferences = {};
+  Object.keys(NOTIF_PREF_LABELS).forEach(key => {
+    np.preferences[key] = document.getElementById('np-'+key).checked;
+  });
+  np.admin_email = document.getElementById('set-admin-email').value.trim();
+
+  showToast('Saving...','ok');
+  const r = await GH.writeFile('notification_prefs.json', np, S.shas.notifPrefs, 'Update notification prefs (mobile)');
+  if (r.ok) { S.notifPrefs = np; S.shas.notifPrefs = r.sha; }
+  localStorage.setItem(CACHE_KEY, JSON.stringify(S));
+  showToast(r.ok?'Notification settings saved':'Save failed','ok');
 }
 
 // ===== Start =====

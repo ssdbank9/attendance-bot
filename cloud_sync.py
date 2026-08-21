@@ -227,10 +227,22 @@ def sync_status():
     return sync_github_file("timein_status.json", content, "Sync status from desktop")
 
 
+def sync_notification_prefs():
+    """Push notification_prefs.json to GitHub repo."""
+    np_path = BASE_DIR / "notification_prefs.json"
+    if not np_path.exists():
+        return False, "notification_prefs.json not found"
+    with open(np_path, "r", encoding="utf-8") as f:
+        content = f.read()
+    return sync_github_file("notification_prefs.json", content, "Sync notification prefs from desktop")
+
+
 def pull_from_cloud():
-    """Pull blackout.json and leave_balance.json from GitHub, merge with local."""
+    """Pull blackout.json, leave_balance.json and notification_prefs.json from
+    GitHub, merge with local (blackout.json gets a real merge; the others are
+    a straight remote-wins overwrite)."""
     results = {}
-    for fname in ("blackout.json", "leave_balance.json"):
+    for fname in ("blackout.json", "leave_balance.json", "notification_prefs.json"):
         ok, msg, pulled = pull_github_file(fname)
         if ok and pulled:
             local_path = BASE_DIR / fname
@@ -288,6 +300,8 @@ def push_all():
     results["leave_balance"] = {"ok": r3[0], "message": r3[1]}
     r4 = sync_status()
     results["status"] = {"ok": r4[0], "message": r4[1]}
+    r5 = sync_notification_prefs()
+    results["notification_prefs"] = {"ok": r5[0], "message": r5[1]}
     log.info("Push all: %s", results)
     return results
 

@@ -12,12 +12,21 @@ from pathlib import Path
 
 BASE_DIR = Path(__file__).parent
 CONFIG_FILE = BASE_DIR / "config.json"
+NOTIF_PREFS_FILE = BASE_DIR / "notification_prefs.json"
 log = logging.getLogger("attendance_bot")
 
 
 def load_config():
     with open(CONFIG_FILE, "r") as f:
         return json.load(f)
+
+
+def load_notif_prefs():
+    try:
+        with open(NOTIF_PREFS_FILE, "r") as f:
+            return json.load(f)
+    except Exception:
+        return {}
 
 
 def get_local_ip():
@@ -41,8 +50,7 @@ def get_dashboard_url():
 
 def pref_enabled(key):
     try:
-        config = load_config()
-        prefs = config.get("notifications", {}).get("preferences", {})
+        prefs = load_notif_prefs().get("preferences", {})
         return prefs.get(key, True)
     except Exception:
         return True
@@ -50,8 +58,7 @@ def pref_enabled(key):
 
 def get_admin_email():
     try:
-        config = load_config()
-        return config.get("notifications", {}).get("admin_email", "")
+        return load_notif_prefs().get("admin_email", "")
     except Exception:
         return ""
 
