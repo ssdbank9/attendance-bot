@@ -12,8 +12,8 @@
   },
   "timein": {
     "date": "2026-08-21",
-    "status": "skipped",
-    "message": "Cannot Time-In today: you haven't Timed-Out for 20-Aug-2026",
-    "timestamp": "2026-08-21 08:45:02"
+    "status": "failed",
+    "message": "Time-In FAILED after 3 attempts",
+    "timestamp": "2026-08-21 09:15:04"
   }
 }
