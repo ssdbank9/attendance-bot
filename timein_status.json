@@ -13,8 +13,9 @@
   },
   "timein": {
     "date": "2026-08-21",
-    "status": "skipped",
-    "message": "Time-In already posted today 21-Aug-2026 at 09:19:54",
-    "timestamp": "2026-08-21 15:34:15"
+    "status": "success",
+    "message": "Time-In marked at 09:19:54",
+    "timestamp": "2026-08-21 09:19:54",
+    "action_time": "09:19:54"
   }
 }

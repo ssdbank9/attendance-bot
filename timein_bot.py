@@ -269,63 +269,66 @@ def pick_target_time(mode):
     return target, sleep_secs
 
 
+API_URL = "https://portalservice.aku.edu/Service1.svc/json/TimeInTimeOut/"
+
+
+def classify_aku_message(message):
+    """Given the AKU API's TimeInTimeOutResult text, decide whether it means
+    the action succeeded (or was already done) vs a real error. Returns
+    (ok: bool, message: str)."""
+    if isinstance(message, list):
+        message = message[0] if message else ""
+    if not message:
+        return False, "API returned empty response"
+    msg_lower = message.lower()
+    if "invalid" in msg_lower or "does not exist" in msg_lower or "no time in information" in msg_lower:
+        return False, "API error: " + message
+    if "error" in msg_lower and "already" not in msg_lower:
+        return False, "API error: " + message
+    return True, message
+
+
+def call_aku_api(mode, user_id, password):
+    """Call the AKU TimeInTimeOut API directly. Returns (ok, message)."""
+    action_code = "I" if mode == "timein" else "O"
+    payload = {"_action": action_code, "_userid": user_id, "_password": password}
+
+    import requests
+    resp = requests.post(
+        API_URL, json=payload,
+        headers={"Content-Type": "application/json; charset=utf-8"},
+        timeout=30,
+    )
+    if resp.status_code != 200:
+        return False, "HTTP " + str(resp.status_code)
+
+    result = resp.json()
+    message = result.get("TimeInTimeOutResult", "")
+    log.info("API response: %s", message)
+    return classify_aku_message(message)
+
+
 def run_action(mode):
     config = load_config()
     creds = config["credentials"]
-    user_id = creds["user_id"]
-    password = creds["password"]
     label = LABELS[mode]
-    action_code = "I" if mode == "timein" else "O"
-
-    API_URL = "https://portalservice.aku.edu/Service1.svc/json/TimeInTimeOut/"
-
-    payload = {
-        "_action": action_code,
-        "_userid": user_id,
-        "_password": password
-    }
 
     log.info("[%s] Calling API %s", label, API_URL)
-
     try:
-        import requests
-        resp = requests.post(
-            API_URL,
-            json=payload,
-            headers={"Content-Type": "application/json; charset=utf-8"},
-            timeout=30
-        )
-
-        if resp.status_code == 200:
-            result = resp.json()
-            message = result.get("TimeInTimeOutResult", "")
-            if isinstance(message, list):
-                message = message[0] if message else ""
-            log.info("API response: %s", message)
-
-            msg_lower = message.lower() if message else ""
-            if not message:
-                return False, "API returned empty response"
-            if "invalid" in msg_lower or "does not exist" in msg_lower or "no time in information" in msg_lower:
-                return False, "API error: " + message
-            if "error" in msg_lower and "already" not in msg_lower:
-                return False, "API error: " + message
-
+        ok, message = call_aku_api(mode, creds["user_id"], creds["password"])
+        if ok:
             now = datetime.now().strftime("%H:%M:%S")
             log.info("%s complete at %s (API: %s)", label, now, message)
             return True, now
-        else:
-            log.warning("API HTTP %d: %s", resp.status_code, resp.text[:200])
-            return False, "HTTP " + str(resp.status_code)
-
+        return False, message
     except Exception as e:
         log.exception("%s API call failed", label)
         return False, str(e)
 
 
 def run_action_selenium(mode):
-    """Fallback: drive the saved portal HTML page in a real browser via Selenium,
-    same as the original approach, for use when the direct API call fails."""
+    """Drive the saved portal HTML page in a real browser via Selenium (the
+    primary method - see USE_DIRECT_API), then verify the result via the API."""
     config = load_config()
     creds = config["credentials"]
     user_id = creds["user_id"]
@@ -355,17 +358,34 @@ def run_action_selenium(mode):
         button = wait.until(EC.element_to_be_clickable((By.ID, button_id)))
         button.click()
         log.info("Clicked %s", label)
-
         time.sleep(3)
-        now = datetime.now().strftime("%H:%M:%S")
-        log.info("%s complete at %s (Selenium fallback)", label, now)
-        return True, now
     except Exception as e:
-        log.exception("%s Selenium fallback failed", label)
+        log.exception("%s Selenium click failed", label)
         return False, str(e)
     finally:
         if driver:
             driver.quit()
+
+    # The click alone doesn't confirm the portal actually accepted the
+    # action (no fixed success indicator was found in the saved page).
+    # Verify with the same API call used by the direct-API path - this is
+    # safe to call again even if the click already succeeded, since AKU's
+    # API is idempotent and just reports "already Entered" once the action
+    # has landed; it also self-heals if the click silently failed by
+    # performing the real action here instead.
+    try:
+        ok, message = call_aku_api(mode, user_id, password)
+    except Exception as e:
+        log.exception("%s post-click API verification failed", label)
+        return False, f"Clicked but could not verify: {e}"
+
+    if not ok:
+        log.warning("%s clicked but API verification says: %s", label, message)
+        return False, f"Clicked but not confirmed ({message})"
+
+    now = datetime.now().strftime("%H:%M:%S")
+    log.info("%s complete at %s (Selenium, verified: %s)", label, now, message)
+    return True, now
 
 
 def attempt_action(mode, retry_cfg):
@@ -441,7 +461,9 @@ def main():
         today_fmt = datetime.now().strftime("%d-%b-%Y")
         msg = f"{label} already posted today {today_fmt} at {done_time}"
         log.info("=== %s - skipping ===", msg)
-        write_status(mode, "skipped", msg)
+        # Do NOT write_status here - it would overwrite the existing
+        # "success" record with "skipped", corrupting timein_done_today()/
+        # pending_prior_day_timein() for every check that follows.
         if now_flag:
             print(msg)
         return
@@ -484,7 +506,7 @@ def main():
             today_fmt = datetime.now().strftime("%d-%b-%Y")
             msg = f"{label} already posted today {today_fmt} at {done_time} (completed by the other trigger while waiting)"
             log.info("=== %s - skipping ===", msg)
-            write_status(mode, "skipped", msg)
+            # Not write_status here either - same reason as above.
             return
     else:
         log.info("Manual trigger - running immediately")
