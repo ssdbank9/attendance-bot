@@ -430,6 +430,18 @@ def main():
         )
 
         time.sleep(sleep_secs)
+
+        # Two independent triggers (Task Scheduler + the GitHub Actions
+        # self-hosted runner) can both wake up in this same window. Re-check
+        # after the sleep so the loser of that race doesn't still perform a
+        # real duplicate action against the portal.
+        done, done_time = already_done(mode)
+        if done:
+            today_fmt = datetime.now().strftime("%d-%b-%Y")
+            msg = f"{label} already posted today {today_fmt} at {done_time} (completed by the other trigger while waiting)"
+            log.info("=== %s - skipping ===", msg)
+            write_status(mode, "skipped", msg)
+            return
     else:
         log.info("Manual trigger - running immediately")
 
