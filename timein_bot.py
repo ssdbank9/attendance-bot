@@ -102,10 +102,10 @@ def write_status(mode, status, message, action_time=None, date_str=None):
         pass
 
     if status == "success" and action_time:
-        _log_history(mode, action_time)
+        _log_history(mode, action_time, date_str)
 
 
-def _log_history(mode, action_time):
+def _log_history(mode, action_time, date_str=None):
     try:
         if HISTORY_FILE.exists():
             with open(HISTORY_FILE, "r") as f:
@@ -114,10 +114,10 @@ def _log_history(mode, action_time):
             data = {"records": {}}
     except Exception:
         data = {"records": {}}
-    today = datetime.now().strftime("%Y-%m-%d")
-    if today not in data["records"]:
-        data["records"][today] = {}
-    data["records"][today][mode] = action_time
+    day = date_str or datetime.now().strftime("%Y-%m-%d")
+    if day not in data["records"]:
+        data["records"][day] = {}
+    data["records"][day][mode] = action_time
     with open(HISTORY_FILE, "w") as f:
         json.dump(data, f, indent=2)
 

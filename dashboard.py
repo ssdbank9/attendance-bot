@@ -725,6 +725,25 @@ def action_test_cloud_sync():
         parts.append(f"{svc}: {status} ({r['message']})")
     return redirect(url_for("dashboard", msg="Sync test: " + "; ".join(parts)))
 
+def compute_hours_worked(ti, to):
+    """Hours between a Time-In and Time-Out clock-time on the same nominal
+    day. Returns None (unknown/not displayable) rather than a bogus negative
+    or huge value - this happens for auto-completed catch-up Time-Outs,
+    where the recorded clock-time can be earlier than the Time-In's because
+    the catch-up actually ran on a later real day but is stamped against the
+    pending day it closes out."""
+    if not ti or not to:
+        return None
+    ti_parts = ti.split(":")
+    to_parts = to.split(":")
+    ti_min = int(ti_parts[0]) * 60 + int(ti_parts[1])
+    to_min = int(to_parts[0]) * 60 + int(to_parts[1])
+    hours = round((to_min - ti_min) / 60, 2)
+    if hours <= 0 or hours > 20:
+        return None
+    return hours
+
+
 @app.route("/api/status")
 def api_status():
     return jsonify(load_json(STATUS_FILE))
@@ -746,13 +765,7 @@ def api_analytics():
         ti = rec.get("timein")
         to = rec.get("timeout")
         if ti or to:
-            hours = 0
-            if ti and to:
-                ti_parts = ti.split(":")
-                to_parts = to.split(":")
-                ti_min = int(ti_parts[0]) * 60 + int(ti_parts[1])
-                to_min = int(to_parts[0]) * 60 + int(to_parts[1])
-                hours = round((to_min - ti_min) / 60, 2)
+            hours = compute_hours_worked(ti, to) or 0
             days.append({"date": ds, "day": d.strftime("%a"), "timein": ti or "-", "timeout": to or "-", "hours": hours})
         d += timedelta(days=1)
     return jsonify({"records": days})
@@ -773,16 +786,13 @@ def download_report():
         rec = records.get(ds, {})
         ti = rec.get("timein", "")
         to = rec.get("timeout", "")
-        hours = 0
-        if ti and to:
-            ti_parts = ti.split(":")
-            to_parts = to.split(":")
-            ti_min = int(ti_parts[0]) * 60 + int(ti_parts[1])
-            to_min = int(to_parts[0]) * 60 + int(to_parts[1])
-            hours = round((to_min - ti_min) / 60, 2)
-        diff = round(hours - TARGET_MINUTES / 60, 2) if hours > 0 else 0
-        diff_str = f"+{diff}" if diff >= 0 else str(diff)
-        writer.writerow([ds, d.strftime("%A"), ti, to, f"{hours:.2f}", "9.17", diff_str if hours > 0 else ""])
+        hours = compute_hours_worked(ti, to)
+        diff_str = ""
+        hours_str = f"{hours:.2f}" if hours is not None else ("N/A" if (ti and to) else "")
+        if hours is not None:
+            diff = round(hours - TARGET_MINUTES / 60, 2)
+            diff_str = f"+{diff}" if diff >= 0 else str(diff)
+        writer.writerow([ds, d.strftime("%A"), ti, to, hours_str, "9.17", diff_str])
         d += timedelta(days=1)
     output.seek(0)
     return Response(output.getvalue(), mimetype="text/csv",
