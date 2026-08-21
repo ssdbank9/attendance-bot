@@ -11,10 +11,9 @@
     "timestamp": "2026-08-20 21:07:55"
   },
   "timein": {
-    "date": "2026-08-20",
-    "status": "success",
-    "message": "Time-In marked at 09:03:04",
-    "timestamp": "2026-08-20 09:03:06",
-    "action_time": "09:03:04"
+    "date": "2026-08-21",
+    "status": "skipped",
+    "message": "Cannot Time-In today: you haven't Timed-Out for 20-Aug-2026",
+    "timestamp": "2026-08-21 08:45:02"
   }
 }
