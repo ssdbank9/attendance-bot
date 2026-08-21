@@ -8,8 +8,9 @@
   },
   "timeout": {
     "date": "2026-08-21",
-    "status": "failed",
-    "message": "Time-Out FAILED after 3 attempts",
-    "timestamp": "2026-08-21 21:08:01"
+    "status": "success",
+    "message": "Time-Out marked at 20:33:00 (corrected - portal confirmed this succeeded via another automation; local record was wrong because our own attempts arrived after it was already done)",
+    "timestamp": "2026-08-21 21:20:00",
+    "action_time": "20:33:00"
   }
 }
