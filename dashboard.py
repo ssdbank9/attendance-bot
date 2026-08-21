@@ -636,12 +636,8 @@ def action_timein_now():
     if ti.get("date") == today and ti.get("status") == "success":
         today_fmt = datetime.now().strftime("%d-%b-%Y")
         return redirect(url_for("dashboard", msg=f"Time-In already posted today {today_fmt} at " + ti.get("action_time", "?")))
-    to = status.get("timeout", {})
-    ti_date = ti.get("date", "")
-    if (ti.get("status") == "success" and ti_date < today
-            and (to.get("date") != ti_date or to.get("status") != "success")):
-        missed_fmt = datetime.strptime(ti_date, "%Y-%m-%d").strftime("%d-%b-%Y")
-        return redirect(url_for("dashboard", msg=f"Cannot Time-In today: you haven't Timed-Out for {missed_fmt}"))
+    # A dangling prior-day Time-Out is no longer a hard block here -
+    # timein_bot.py auto-completes it before proceeding with today's Time-In.
     subprocess.Popen([sys.executable, str(BASE_DIR / "timein_bot.py"), "timein", "--now"],
                      creationflags=subprocess.CREATE_NO_WINDOW)
     from notify import notify

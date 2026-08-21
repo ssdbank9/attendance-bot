@@ -368,6 +368,62 @@ def run_action_selenium(mode):
             driver.quit()
 
 
+def attempt_action(mode, retry_cfg):
+    """Run the retry loop for a mode (Selenium primary, optional direct API
+    first). Returns (success, detail)."""
+    max_attempts = retry_cfg["max_attempts"]
+    retry_delay = retry_cfg["delay_seconds"]
+
+    if USE_DIRECT_API:
+        for attempt in range(1, max_attempts + 1):
+            log.info("Attempt %d/%d (API)", attempt, max_attempts)
+            success, detail = run_action(mode)
+            if success:
+                return True, detail
+            log.warning("Attempt %d failed: %s", attempt, detail)
+            if attempt < max_attempts:
+                log.info("Retrying in %d seconds...", retry_delay)
+                time.sleep(retry_delay)
+        log.warning("API method exhausted after %d attempts - falling back to Selenium", max_attempts)
+
+    for attempt in range(1, max_attempts + 1):
+        log.info("Attempt %d/%d (Selenium)", attempt, max_attempts)
+        success, detail = run_action_selenium(mode)
+        if success:
+            return True, detail
+        log.warning("Attempt %d failed: %s", attempt, detail)
+        if attempt < max_attempts:
+            log.info("Retrying in %d seconds...", retry_delay)
+            time.sleep(retry_delay)
+
+    return False, f"FAILED after {max_attempts} attempts"
+
+
+def run_and_record(mode, retry_cfg, catchup_date=None):
+    """Run attempt_action for mode, write status, notify. Returns success."""
+    label = LABELS[mode]
+    success, detail = attempt_action(mode, retry_cfg)
+
+    if success:
+        if catchup_date:
+            missed_fmt = datetime.strptime(catchup_date, "%Y-%m-%d").strftime("%d-%b-%Y")
+            msg = f"{label} marked at {detail} (completed pending {missed_fmt})"
+        else:
+            msg = f"{label} marked at {detail}"
+        log.info(msg)
+        write_status(mode, "success", msg, action_time=detail, date_str=catchup_date)
+        notify_status(mode, detail)
+        log.info("=== Done ===")
+        return True
+
+    msg = f"{label} {detail}"
+    log.error(msg)
+    write_status(mode, "failed", msg)
+    notify_failure(mode, retry_cfg["max_attempts"])
+    log.info("=== Done (FAILED) ===")
+    return False
+
+
 def main():
     mode = sys.argv[1] if len(sys.argv) > 1 else "timein"
     now_flag = "--now" in sys.argv
@@ -391,18 +447,6 @@ def main():
         return
 
     catchup_date = None
-
-    if mode == "timein":
-        pending_date = pending_prior_day_timein()
-        if pending_date:
-            missed_fmt = datetime.strptime(pending_date, "%Y-%m-%d").strftime("%d-%b-%Y")
-            msg = f"Cannot Time-In today: you haven't Timed-Out for {missed_fmt}"
-            log.info("=== %s - skipping ===", msg)
-            write_status(mode, "skipped", msg)
-            if now_flag:
-                print(msg)
-            return
-
     if mode == "timeout":
         catchup_date = pending_prior_day_timein()
         if not timein_done_today() and not catchup_date:
@@ -445,55 +489,18 @@ def main():
     else:
         log.info("Manual trigger - running immediately")
 
-    max_attempts = retry_cfg["max_attempts"]
-    retry_delay = retry_cfg["delay_seconds"]
-
-    if USE_DIRECT_API:
-        for attempt in range(1, max_attempts + 1):
-            log.info("Attempt %d/%d (API)", attempt, max_attempts)
-            success, detail = run_action(mode)
-
-            if success:
-                msg = f"{label} marked at {detail}"
-                log.info(msg)
-                write_status(mode, "success", msg, action_time=detail)
-                notify_status(mode, detail)
-                log.info("=== Done ===")
+    if mode == "timein":
+        pending_date = pending_prior_day_timein()
+        if pending_date:
+            missed_fmt = datetime.strptime(pending_date, "%Y-%m-%d").strftime("%d-%b-%Y")
+            log.info("Pending Time-Out for %s detected - auto-completing before Time-In", missed_fmt)
+            if not run_and_record("timeout", retry_cfg, catchup_date=pending_date):
+                msg = f"Cannot Time-In: failed to auto-complete pending Time-Out for {missed_fmt}"
+                log.error(msg)
+                write_status(mode, "failed", msg)
                 return
 
-            log.warning("Attempt %d failed: %s", attempt, detail)
-            if attempt < max_attempts:
-                log.info("Retrying in %d seconds...", retry_delay)
-                time.sleep(retry_delay)
-
-        log.warning("API method exhausted after %d attempts - falling back to Selenium", max_attempts)
-
-    for attempt in range(1, max_attempts + 1):
-        log.info("Attempt %d/%d (Selenium)", attempt, max_attempts)
-        success, detail = run_action_selenium(mode)
-
-        if success:
-            if catchup_date:
-                missed_fmt = datetime.strptime(catchup_date, "%Y-%m-%d").strftime("%d-%b-%Y")
-                msg = f"{label} marked at {detail} (completed pending {missed_fmt})"
-            else:
-                msg = f"{label} marked at {detail}"
-            log.info(msg)
-            write_status(mode, "success", msg, action_time=detail, date_str=catchup_date)
-            notify_status(mode, detail)
-            log.info("=== Done ===")
-            return
-
-        log.warning("Attempt %d failed: %s", attempt, detail)
-        if attempt < max_attempts:
-            log.info("Retrying in %d seconds...", retry_delay)
-            time.sleep(retry_delay)
-
-    msg = f"{label} FAILED after {max_attempts} attempts"
-    log.error(msg)
-    write_status(mode, "failed", msg)
-    notify_failure(mode, max_attempts)
-    log.info("=== Done (FAILED) ===")
+    run_and_record(mode, retry_cfg)
 
 
 if __name__ == "__main__":
