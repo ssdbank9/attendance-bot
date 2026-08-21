@@ -8,6 +8,7 @@ import logging
 import socket
 import urllib.request
 import urllib.error
+import urllib.parse
 from pathlib import Path
 
 BASE_DIR = Path(__file__).parent
@@ -174,7 +175,15 @@ def notify_failure(mode, attempts):
         today = datetime.now().strftime("%Y-%m-%d")
         admin_first = admin_email.split("@")[0].split(".")[0].capitalize()
         subject = f"Attendance Correction Request - {today}"
-        mailto = f"mailto:{admin_email}?subject={subject}&body=Dear {admin_first},%0D%0A%0D%0AMy {label} for {today} was not recorded correctly. I was present in the office. Could you please correct my attendance record?%0D%0A%0D%0AThank you."
+        body = (
+            f"Dear {admin_first},\r\n\r\n"
+            f"My {label} for {today} was not recorded correctly. I was present in the office. "
+            f"Could you please correct my attendance record?\r\n\r\nThank you."
+        )
+        # ntfy's Actions header uses commas/semicolons as field separators, so any
+        # raw comma in the mailto URL (e.g. "Dear Ameen,") breaks parsing and the
+        # whole notification gets rejected with HTTP 400 - must be fully encoded.
+        mailto = f"mailto:{admin_email}?subject={urllib.parse.quote(subject)}&body={urllib.parse.quote(body)}"
         actions = (
             f"view, {action_label}, {action_url}; "
             f"view, Email Admin, {mailto}; "
