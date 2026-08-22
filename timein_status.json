@@ -1,10 +1,9 @@
 {
   "timein": {
-    "date": "2026-08-21",
-    "status": "success",
-    "message": "Time-In marked at 08:05:00 (corrected - portal confirmed this was the real time; our own check at 09:19:54 just happened to be when we noticed it)",
-    "timestamp": "2026-08-21 21:20:17",
-    "action_time": "08:05:00"
+    "date": "2026-08-22",
+    "status": "skipped",
+    "message": "Weekend (Saturday)",
+    "timestamp": "2026-08-22 08:45:02"
   },
   "timeout": {
     "date": "2026-08-21",
