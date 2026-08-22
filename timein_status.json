@@ -6,10 +6,9 @@
     "timestamp": "2026-08-22 08:45:02"
   },
   "timeout": {
-    "date": "2026-08-21",
-    "status": "success",
-    "message": "Time-Out marked at 20:33:00 (corrected - portal confirmed this succeeded via another automation; local record was wrong because our own attempts arrived after it was already done)",
-    "timestamp": "2026-08-21 21:20:00",
-    "action_time": "20:33:00"
+    "date": "2026-08-23",
+    "status": "skipped",
+    "message": "Cannot Time-Out: no Time-In recorded today 23-Aug-2026",
+    "timestamp": "2026-08-23 00:46:16"
   }
 }
