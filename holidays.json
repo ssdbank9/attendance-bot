@@ -11,19 +11,19 @@
       "confirmed": true
     },
     {
-      "date": "2026-03-22",
+      "date": "2026-03-21",
       "label": "Eid ul-Fitr (Day 1)",
       "confirmed": true,
       "moon_dependent": true
     },
     {
-      "date": "2026-03-23",
+      "date": "2026-03-22",
       "label": "Eid ul-Fitr (Day 2)",
       "confirmed": true,
       "moon_dependent": true
     },
     {
-      "date": "2026-03-24",
+      "date": "2026-03-23",
       "label": "Eid ul-Fitr (Day 3) / Pakistan Day",
       "confirmed": true,
       "moon_dependent": true
@@ -98,19 +98,19 @@
       "confirmed": true
     },
     {
-      "date": "2027-03-09",
+      "date": "2027-03-08",
       "label": "Eid ul-Fitr (Day 1)",
       "confirmed": true,
       "moon_dependent": true
     },
     {
-      "date": "2027-03-10",
+      "date": "2027-03-09",
       "label": "Eid ul-Fitr (Day 2)",
       "confirmed": true,
       "moon_dependent": true
     },
     {
-      "date": "2027-03-11",
+      "date": "2027-03-10",
       "label": "Eid ul-Fitr (Day 3)",
       "confirmed": true,
       "moon_dependent": true
