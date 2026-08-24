@@ -21,6 +21,10 @@ from datetime import datetime
 from pk_time import now as pk_now
 from pathlib import Path
 
+from console_guard import silence
+silence(Path(__file__).parent / "timein_logs" / "watchdog_stdout.log")
+# pythonw.exe leaves stdout/stderr as None; see console_guard.py
+
 BASE_DIR = Path(__file__).parent
 LOG_DIR = BASE_DIR / "timein_logs"
 LOG_DIR.mkdir(exist_ok=True)
@@ -71,6 +75,21 @@ def health(port):
 
 
 def interpreter():
+    """The venv's python.exe - deliberately NOT pythonw.exe.
+
+    Windows Firewall rules are per-executable, and this host carries
+    auto-generated rules that Allow inbound python.exe but BLOCK inbound
+    pythonw.exe (on Private and Public, so the Tailscale route the phone uses
+    is blocked too). Serving the dashboard from pythonw.exe therefore makes it
+    unreachable from the phone with no error anywhere - the server comes up
+    healthy on localhost and simply never receives the connection.
+
+    A console window is not the trade-off here: launch() passes
+    CREATE_NO_WINDOW, which runs a console binary with no console attached. So
+    python.exe stays firewall-allowed AND draws nothing. Only the scheduled
+    task's own entry point needs pythonw.exe, and that process listens on
+    nothing.
+    """
     venv = BASE_DIR / ".venv-dashboard" / "Scripts" / "python.exe"
     return str(venv) if venv.exists() else sys.executable
 
@@ -83,7 +102,8 @@ def kill_wedged(port):
             return
     try:
         out = subprocess.run(
-            ["netstat", "-ano"], capture_output=True, text=True, timeout=20
+            ["netstat", "-ano"], capture_output=True, text=True, timeout=20,
+            creationflags=subprocess.CREATE_NO_WINDOW,
         ).stdout
     except Exception as e:
         log.warning("Could not enumerate sockets to free port %s: %s", port, e)
@@ -95,7 +115,8 @@ def kill_wedged(port):
             pid = parts[4]
             log.warning("Killing wedged process %s holding port %s", pid, port)
             subprocess.run(["taskkill", "/F", "/PID", pid],
-                           capture_output=True, timeout=20)
+                           capture_output=True, timeout=20,
+                           creationflags=subprocess.CREATE_NO_WINDOW)
 
 
 def launch(port):

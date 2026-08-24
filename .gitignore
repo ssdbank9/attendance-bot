@@ -35,3 +35,6 @@ static/
 *~
 Thumbs.db
 Desktop.ini
+
+# Scheduled-task definitions exported before the hide-the-window change
+task_backup/

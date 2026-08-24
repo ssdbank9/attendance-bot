@@ -27,9 +27,14 @@ import attendance_db as db
 
 from selenium import webdriver
 from selenium.webdriver.edge.options import Options
+from selenium.webdriver.edge.service import Service as EdgeService
 from selenium.webdriver.common.by import By
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
+
+from console_guard import silence
+silence(Path(__file__).parent / "timein_logs" / "timein_stdout.log")
+# pythonw.exe leaves stdout/stderr as None; see console_guard.py
 
 BASE_DIR = Path(__file__).parent
 LOG_DIR = BASE_DIR / "timein_logs"
@@ -61,11 +66,29 @@ LABELS = {
     "timeout": "Time-Out",
 }
 
-# The direct AKU API (portalservice.aku.edu) is a private-network address and
-# is unreliable/unreachable off the AKU network. Selenium (driving the saved
-# portal page in a real browser) is the primary method; set this True to
-# re-enable the direct API attempts before falling back to Selenium.
-USE_DIRECT_API = False
+# The direct AKU API (portalservice.aku.edu) is the primary method: it draws
+# nothing on screen, which matters because a visible Edge window announced the
+# bot mid-presentation. This is not a new dependency - the Selenium path always
+# called the same endpoint to verify its click, so a run that could not reach
+# the API never succeeded anyway. Off the AKU network the API is unreachable;
+# the attempts then fail and Selenium (now headless) still runs as the fallback.
+USE_DIRECT_API = True
+
+# Windows shows a console window for every python.exe/child process a task
+# spawns. CREATE_NO_WINDOW on each spawn plus pythonw.exe for the scheduled
+# entry points keeps the bot invisible.
+NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0x08000000)
+
+
+def gui_executable():
+    """sys.executable's console-free twin (pythonw.exe) when it exists, so a
+    process we register or spawn cannot flash a black console window."""
+    exe = Path(sys.executable)
+    if exe.name.lower() == "python.exe":
+        quiet = exe.with_name("pythonw.exe")
+        if quiet.exists():
+            return str(quiet)
+    return sys.executable
 
 
 def load_config():
@@ -404,8 +427,9 @@ def run_action(mode):
 
 
 def run_action_selenium(mode):
-    """Drive the saved portal HTML page in a real browser via Selenium (the
-    primary method - see USE_DIRECT_API), then verify the result via the API."""
+    """Drive the saved portal HTML page in a headless browser via Selenium (the
+    fallback behind the direct API - see USE_DIRECT_API), then verify the result
+    via the API."""
     config = load_config()
     creds = config["credentials"]
     user_id = creds["user_id"]
@@ -419,7 +443,16 @@ def run_action_selenium(mode):
         log.info("[%s] (Selenium fallback) Opening %s", label, HTML_FILE.as_uri())
         options = Options()
         options.add_argument("--disable-gpu")
-        driver = webdriver.Edge(options=options)
+        # Headless because a visible Edge window opening itself and typing
+        # credentials announces the bot to anyone watching the screen. It also
+        # becomes mandatory if the tasks are moved to session 0
+        # (enable_session0.ps1), which has no desktop to draw on at all.
+        options.add_argument("--headless=new")
+        options.add_argument("--window-size=1280,900")
+        options.add_argument("--log-level=3")
+        # Without this msedgedriver.exe opens its own console window.
+        service = EdgeService(creation_flags=NO_WINDOW)
+        driver = webdriver.Edge(options=options, service=service)
         driver.get(HTML_FILE.as_uri())
 
         wait = WebDriverWait(driver, 20)
@@ -577,21 +610,38 @@ def schedule_oneshot(mode, target):
     """Register a wake-capable one-time task at `target`. True if it took."""
     task = f"{ONESHOT_PREFIX}{mode}"
     script = str(Path(__file__).resolve())
+    exe = gui_executable()
     # Expires shortly after the target so a stale task cannot re-fire, but with
     # enough slack that a host resuming late still runs it rather than skipping.
     end = target + timedelta(hours=4)
     ps = f"""$ErrorActionPreference = 'Stop'
-$a = New-ScheduledTaskAction -Execute '{sys.executable}' -Argument '"{script}" {mode} --scheduled' -WorkingDirectory '{BASE_DIR}'
+$a = New-ScheduledTaskAction -Execute '{exe}' -Argument '"{script}" {mode} --scheduled' -WorkingDirectory '{BASE_DIR}'
 $t = New-ScheduledTaskTrigger -Once -At '{target:%Y-%m-%dT%H:%M:%S}'
 $t.EndBoundary = '{end:%Y-%m-%dT%H:%M:%S}'
 $s = New-ScheduledTaskSettingsSet -WakeToRun -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -StartWhenAvailable -ExecutionTimeLimit (New-TimeSpan -Minutes 30) -DeleteExpiredTaskAfter (New-TimeSpan -Minutes 5)
 $s.Priority = 4
-Register-ScheduledTask -TaskName '{task}' -Action $a -Trigger $t -Settings $s -Force | Out-Null
+$s.Hidden = $true
+# S4U + Hidden runs the wake-up in session 0, where no window can be drawn at
+# all. Switching a task's principal needs elevation, so when this shell is not
+# elevated fall back to the default interactive principal - pythonw.exe plus
+# Hidden already means nothing appears on screen; only the session differs.
+# The fallback matters: a failed registration would drop the caller into an
+# hours-long inline sleep, which is exactly the late-attendance bug that the
+# one-shot handoff exists to prevent.
+$p = New-ScheduledTaskPrincipal -UserId ("$env:USERDOMAIN" + [char]92 + "$env:USERNAME") -LogonType S4U -RunLevel Limited
+try {{
+  Register-ScheduledTask -TaskName '{task}' -Action $a -Trigger $t -Settings $s -Principal $p -Force | Out-Null
+  Write-Output 'principal=S4U'
+}} catch {{
+  Register-ScheduledTask -TaskName '{task}' -Action $a -Trigger $t -Settings $s -Force | Out-Null
+  Write-Output 'principal=interactive'
+}}
 """
     try:
         r = subprocess.run(
             ["powershell", "-NoProfile", "-NonInteractive", "-Command", ps],
             capture_output=True, text=True, timeout=90,
+            creationflags=NO_WINDOW,
         )
     except Exception as e:
         log.warning("Could not register %s (%s) - falling back to inline wait", task, e)
@@ -602,7 +652,8 @@ Register-ScheduledTask -TaskName '{task}' -Action $a -Trigger $t -Settings $s -F
             task, (r.stderr or r.stdout).strip()[:300],
         )
         return False
-    log.info("Scheduled wake-capable %s for %s", task, target.strftime("%H:%M:%S"))
+    log.info("Scheduled wake-capable %s for %s (%s)", task,
+             target.strftime("%H:%M:%S"), (r.stdout or "").strip() or "principal=?")
     return True
 
 

@@ -22,6 +22,10 @@ from urllib.parse import parse_qs, urlsplit
 from flask import (Flask, redirect, url_for, jsonify, request, Response,
                    send_from_directory, session)
 
+from console_guard import silence
+silence(Path(__file__).parent / "timein_logs" / "dashboard_stdout.log")
+# pythonw.exe leaves stdout/stderr as None; see console_guard.py
+
 BASE_DIR = Path(__file__).parent
 CONFIG_FILE = BASE_DIR / "config.json"
 STATUS_FILE = BASE_DIR / "timein_status.json"
@@ -279,7 +283,8 @@ def get_active_blackouts():
 def run_manage(script, *args):
     cmd = [sys.executable, str(BASE_DIR / script)] + list(args)
     try:
-        r = subprocess.run(cmd, capture_output=True, text=True, timeout=15)
+        r = subprocess.run(cmd, capture_output=True, text=True, timeout=15,
+                           creationflags=subprocess.CREATE_NO_WINDOW)
         return r.returncode == 0, r.stdout.strip()
     except Exception as e:
         return False, str(e)

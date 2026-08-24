@@ -18,6 +18,10 @@ from datetime import datetime, timedelta
 from pk_time import now as pk_now
 from pathlib import Path
 
+from console_guard import silence
+silence(Path(__file__).parent / "timein_logs" / "holiday_reminder_stdout.log")
+# pythonw.exe leaves stdout/stderr as None; see console_guard.py
+
 BASE_DIR = Path(__file__).parent
 HOLIDAYS_FILE = BASE_DIR / "holidays.json"
 BLACKOUT_FILE = BASE_DIR / "blackout.json"
