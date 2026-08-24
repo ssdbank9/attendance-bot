@@ -15,6 +15,7 @@ import tkinter as tk
 from notify import notify_tomorrow, notify_tomorrow_skipped, notify_tomorrow_holiday, notify_holiday_reminder, schedule_deadman_switch
 from tkinter import messagebox
 from datetime import datetime, timedelta
+from pk_time import now as pk_now
 from pathlib import Path
 
 BASE_DIR = Path(__file__).parent
@@ -58,7 +59,7 @@ def is_blacked_out(date_str):
 
 def get_holidays_in_days(days):
     data = load_json(HOLIDAYS_FILE)
-    target = (datetime.now() + timedelta(days=days)).strftime("%Y-%m-%d")
+    target = (pk_now() + timedelta(days=days)).strftime("%Y-%m-%d")
     return [h for h in data.get("holidays", []) if h["date"] == target]
 
 
@@ -128,7 +129,7 @@ def show_holiday_popup(upcoming):
 
 
 def send_tomorrow_notification():
-    tomorrow = datetime.now() + timedelta(days=1)
+    tomorrow = pk_now() + timedelta(days=1)
     tomorrow_str = tomorrow.strftime("%Y-%m-%d")
     day_name = tomorrow.strftime("%A")
 

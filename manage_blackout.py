@@ -14,6 +14,7 @@ Usage:
 import json
 import sys
 from datetime import datetime, timedelta
+from pk_time import now as pk_now
 from pathlib import Path
 
 BLACKOUT_FILE = Path(__file__).parent / "blackout.json"
@@ -33,7 +34,7 @@ def save(data):
 
 def resolve_date(s):
     s = s.lower().strip()
-    today = datetime.now().date()
+    today = pk_now().date()
     if s == "today":
         return today.strftime("%Y-%m-%d")
     if s == "tomorrow":
@@ -73,7 +74,7 @@ def skip_date(date_input, reason=""):
     data["dates"].append({
         "date": date_str,
         "reason": reason,
-        "added": datetime.now().strftime("%Y-%m-%d %H:%M"),
+        "added": pk_now().strftime("%Y-%m-%d %H:%M"),
     })
     data["dates"].sort(key=lambda d: d["date"])
     save(data)
@@ -95,7 +96,7 @@ def skip_range(start_input, end_input, reason=""):
         "start": start,
         "end": end,
         "reason": reason,
-        "added": datetime.now().strftime("%Y-%m-%d %H:%M"),
+        "added": pk_now().strftime("%Y-%m-%d %H:%M"),
     })
     data["ranges"].sort(key=lambda r: r["start"])
     save(data)
@@ -132,7 +133,7 @@ def cancel_range(start_input, end_input):
 
 def list_blackouts():
     data = load()
-    today = datetime.now().date()
+    today = pk_now().date()
     has_any = False
 
     active_dates = [d for d in data["dates"] if datetime.strptime(d["date"], "%Y-%m-%d").date() >= today]
@@ -177,7 +178,7 @@ def list_blackouts():
 
 def clear_past():
     data = load()
-    today = datetime.now().strftime("%Y-%m-%d")
+    today = pk_now().strftime("%Y-%m-%d")
     before_d = len(data["dates"])
     before_r = len(data["ranges"])
     data["dates"] = [d for d in data["dates"] if d["date"] >= today]

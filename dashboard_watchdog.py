@@ -18,6 +18,7 @@ import sys
 import urllib.error
 import urllib.request
 from datetime import datetime
+from pk_time import now as pk_now
 from pathlib import Path
 
 BASE_DIR = Path(__file__).parent
@@ -101,7 +102,7 @@ def launch(port):
     # Detached with its own log file so a crash leaves a traceback behind
     # instead of dying invisibly the way the at-logon task did.
     out = open(LOG_DIR / "dashboard_stdout.log", "a", encoding="utf-8", buffering=1)
-    out.write(f"\n--- launched by watchdog {datetime.now():%Y-%m-%d %H:%M:%S} ---\n")
+    out.write(f"\n--- launched by watchdog {pk_now():%Y-%m-%d %H:%M:%S} ---\n")
     subprocess.Popen(
         [interpreter(), "-u", str(BASE_DIR / "dashboard.py")],
         stdout=out,

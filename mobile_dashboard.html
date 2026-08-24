@@ -404,9 +404,13 @@ const CACHE_KEY = 'att_cache';
 // Every date here is a Pakistan local date. toISOString() renders UTC, which
 // is 5 hours behind PKT, so between 00:00 and 05:00 it reports the PREVIOUS
 // day - dates dropped off these lists before the day had actually ended here.
+// PKT is UTC+5 with no DST. Shift the instant so the local getters below read
+// Pakistan wall-clock even when this device is set to another timezone - this
+// page runs on the phone, whose timezone can differ from the dashboard host's.
+const pkNow = () => { const d = new Date(); return new Date(d.getTime() + (d.getTimezoneOffset() + 300)*60000); };
 const ymd = dt => dt.getFullYear()+'-'+String(dt.getMonth()+1).padStart(2,'0')+'-'+String(dt.getDate()).padStart(2,'0');
 const stamp = dt => ymd(dt)+' '+String(dt.getHours()).padStart(2,'0')+':'+String(dt.getMinutes()).padStart(2,'0');
-const today = () => ymd(new Date());
+const today = () => ymd(pkNow());
 const fmt = v => v===Math.floor(v)?Math.floor(v):v;
 const esc = v => String(v == null ? '' : v).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const isIsoDate = v => typeof v === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(v);
@@ -634,8 +638,8 @@ function renderBalance() {
 function getNextDays(n) {
   const days = [];
   // Start at today. It stays on the list until the PKT day genuinely ends.
-  const d = new Date();
-  const todayStr = ymd(new Date());
+  const d = pkNow();
+  const todayStr = ymd(pkNow());
   const st = S.status || {};
   const holDates = new Set();
   ((S.holidays||{}).holidays||[]).forEach(function(h){if(!h.disabled)holDates.add(h.date)});
@@ -773,7 +777,7 @@ function getReportRange() {
   let start = document.getElementById('rep-start').value;
   let end = document.getElementById('rep-end').value;
   if (!start || !end) {
-    const now = new Date();
+    const now = pkNow();
     end = ymd(now);
     const weekAgo = new Date(now); weekAgo.setDate(weekAgo.getDate()-7);
     start = ymd(weekAgo);
@@ -882,7 +886,7 @@ function openLeaveModal(dateStr) {
 }
 
 function getNextWorkday() {
-  const d = new Date(); d.setDate(d.getDate()+1);
+  const d = pkNow(); d.setDate(d.getDate()+1);
   while (d.getDay()===0||d.getDay()===6) d.setDate(d.getDate()+1);
   return ymd(d);
 }
@@ -929,7 +933,7 @@ async function confirmLeave() {
   showToast('Marking leave...','ok');
 
   // Update local state
-  const entry = {date:dateVal, reason:reason+(half?' (Half Day)':''), leave_type:type, days:days, added:stamp(new Date())};
+  const entry = {date:dateVal, reason:reason+(half?' (Half Day)':''), leave_type:type, days:days, added:stamp(pkNow())};
   if (!S.blackout.dates) S.blackout.dates = [];
   S.blackout.dates.push(entry);
   S.blackout.dates.sort(function(a,b){return a.date.localeCompare(b.date)});
@@ -993,12 +997,12 @@ async function addSkip() {
   if (start === end) {
     const existing = S.blackout.dates.find(function(d){return d.date===start});
     if (existing) { showToast('Date already blocked','error'); return; }
-    S.blackout.dates.push({date:start, reason:reason, added:stamp(new Date())});
+    S.blackout.dates.push({date:start, reason:reason, added:stamp(pkNow())});
     S.blackout.dates.sort(function(a,b){return a.date.localeCompare(b.date)});
   } else {
     const existing = S.blackout.ranges.find(function(r){return r.start===start && r.end===end});
     if (existing) { showToast('Range already added','error'); return; }
-    S.blackout.ranges.push({start:start, end:end, reason:reason, added:stamp(new Date())});
+    S.blackout.ranges.push({start:start, end:end, reason:reason, added:stamp(pkNow())});
     S.blackout.ranges.sort(function(a,b){return a.start.localeCompare(b.start)});
   }
 

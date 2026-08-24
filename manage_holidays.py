@@ -14,6 +14,7 @@ Usage:
 import json
 import sys
 from datetime import datetime, timedelta
+from pk_time import now as pk_now
 from pathlib import Path
 
 HOLIDAYS_FILE = Path(__file__).parent / "holidays.json"
@@ -85,7 +86,7 @@ def list_holidays():
     if not data["holidays"]:
         print("No holidays configured.")
         return
-    today = datetime.now().date()
+    today = pk_now().date()
     print(f"{'Date':<14} {'Day':<10} {'Status':<12} Label")
     print("-" * 65)
     for h in data["holidays"]:
@@ -103,7 +104,7 @@ def list_holidays():
 
 def upcoming():
     data = load()
-    today = datetime.now().date()
+    today = pk_now().date()
     print(f"\nUpcoming holidays (next 30 days):")
     found = False
     for h in data["holidays"]:
@@ -228,8 +229,8 @@ def populate_year(year):
 def auto_refresh():
     """Check if all holidays have passed and auto-populate next year."""
     data = load()
-    today = datetime.now().strftime("%Y-%m-%d")
-    current_year = datetime.now().year
+    today = pk_now().strftime("%Y-%m-%d")
+    current_year = pk_now().year
     next_year = current_year + 1
 
     future = [h for h in data.get("holidays", []) if h["date"] >= today and not h.get("disabled", False)]

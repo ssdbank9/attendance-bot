@@ -19,6 +19,7 @@ import logging
 import os
 import subprocess
 from datetime import datetime, timedelta
+from pk_time import now as pk_now
 from pathlib import Path
 
 from notify import notify, notify_status, notify_skip, notify_failure
@@ -82,7 +83,7 @@ def write_status(mode, status, message, action_time=None, date_str=None,
     """Record an event in attendance.db (the single source of truth) and
     have it regenerate timein_status.json/timein_history.json from there -
     dashboard.py/cloud_sync.py/notify.py keep reading those files unchanged."""
-    day = date_str or datetime.now().strftime("%Y-%m-%d")
+    day = date_str or pk_now().strftime("%Y-%m-%d")
     db.record_event(
         day, mode, status, message, action_time,
         action_origin=action_origin, observed_time=observed_time,
@@ -183,7 +184,7 @@ def is_working_weekend(date_str):
 
 def already_done(mode):
     """Check if this mode was already completed today."""
-    today_str = datetime.now().strftime("%Y-%m-%d")
+    today_str = pk_now().strftime("%Y-%m-%d")
     prev = db.get_latest(mode, today_str)
     if prev and prev["status"] == "success":
         return True, prev.get("action_time") or prev.get("observed_time") or "?"
@@ -192,7 +193,7 @@ def already_done(mode):
 
 def timein_done_today():
     """Check if time-in was successfully completed today."""
-    today_str = datetime.now().strftime("%Y-%m-%d")
+    today_str = pk_now().strftime("%Y-%m-%d")
     ti = db.get_latest("timein", today_str)
     return bool(ti and ti["status"] == "success")
 
@@ -203,7 +204,7 @@ def pending_prior_day_timein():
     The AKU system just closes whatever session is currently open, regardless
     of which calendar day it's closed on - so a Time-Out attempt today should
     be allowed to complete a dangling Time-In from an earlier day."""
-    today_str = datetime.now().strftime("%Y-%m-%d")
+    today_str = pk_now().strftime("%Y-%m-%d")
     ti = db.get_latest("timein")
     to = db.get_latest("timeout")
     ti_date = (ti or {}).get("date", "")
@@ -220,7 +221,7 @@ def should_run_today(mode):
         write_status(mode, "skipped", "Bot paused")
         return False
 
-    today = datetime.now()
+    today = pk_now()
     today_str = today.strftime("%Y-%m-%d")
     day_name = today.strftime("%A")
 
@@ -251,7 +252,7 @@ def pick_target_time(mode):
     config = load_config()
     mc = config[mode]
 
-    today = datetime.now().date()
+    today = pk_now().date()
     sh, sm = parse_time(mc["window_start"])
     ph, pm = parse_time(mc["primary_end"])
     eh, em = parse_time(mc["window_end"])
@@ -270,7 +271,7 @@ def pick_target_time(mode):
         offset = primary_secs + random.randint(0, secondary_secs)
 
     target = start + timedelta(seconds=offset)
-    sleep_secs = max(0, (target - datetime.now()).total_seconds())
+    sleep_secs = max(0, (target - pk_now()).total_seconds())
     return target, sleep_secs
 
 
@@ -281,12 +282,12 @@ def pick_fallback_target_time(mode, buffer_minutes=10):
     firing at a suspiciously exact instant every day."""
     config = load_config()
     mc = config[mode]
-    today = datetime.now().date()
+    today = pk_now().date()
     eh, em = parse_time(mc["window_end"])
     start = datetime(today.year, today.month, today.day, eh, em)
     offset = random.randint(0, buffer_minutes * 60)
     target = start + timedelta(seconds=offset)
-    sleep_secs = max(0, (target - datetime.now()).total_seconds())
+    sleep_secs = max(0, (target - pk_now()).total_seconds())
     return target, sleep_secs
 
 
@@ -381,7 +382,7 @@ def run_action(mode):
 
     log.info("[%s] Calling API %s", label, API_URL)
     try:
-        attempted_at = datetime.now()
+        attempted_at = pk_now()
         ok, message = call_aku_api(mode, creds["user_id"], creds["password"])
         if ok:
             field = "In" if mode == "timein" else "Out"
@@ -393,7 +394,7 @@ def run_action(mode):
                     label, portal_time,
                 )
                 return True, portal_time, "preexisting"
-            now = datetime.now().strftime("%H:%M:%S")
+            now = pk_now().strftime("%H:%M:%S")
             log.info("%s complete at %s (API: %s)", label, now, message)
             return True, now, "bot"
         return False, message, "unknown"
@@ -433,7 +434,7 @@ def run_action_selenium(mode):
         log.info("Entered Password")
 
         button = wait.until(EC.element_to_be_clickable((By.ID, button_id)))
-        attempted_at = datetime.now()
+        attempted_at = pk_now()
         button.click()
         log.info("Clicked %s", label)
         time.sleep(3)
@@ -472,7 +473,7 @@ def run_action_selenium(mode):
                     if portal_entry_predates_attempt(other_message, "Out", attempted_at):
                         log.info("%s already completed by another actor - confirmed via reconciliation: %s", label, other_message)
                         return True, real_time, "preexisting"
-                    now = datetime.now().strftime("%H:%M:%S")
+                    now = pk_now().strftime("%H:%M:%S")
                     log.info("%s completed by this Selenium attempt - confirmed via reconciliation: %s", label, other_message)
                     return True, now, "bot"
             except Exception:
@@ -489,7 +490,7 @@ def run_action_selenium(mode):
             label, portal_time,
         )
         return True, portal_time, "preexisting"
-    now = datetime.now().strftime("%H:%M:%S")
+    now = pk_now().strftime("%H:%M:%S")
     log.info("%s complete at %s (Selenium, verified: %s)", label, now, message)
     return True, now, "bot"
 
@@ -624,7 +625,7 @@ def main():
 
     done, done_time = already_done(mode)
     if done:
-        today_fmt = datetime.now().strftime("%d-%b-%Y")
+        today_fmt = pk_now().strftime("%d-%b-%Y")
         msg = f"{label} already posted today {today_fmt} at {done_time}"
         log.info("=== %s - skipping ===", msg)
         # Do NOT write_status here - it would overwrite the existing
@@ -638,7 +639,7 @@ def main():
     if mode == "timeout":
         catchup_date = pending_prior_day_timein()
         if not timein_done_today() and not catchup_date:
-            today_fmt = datetime.now().strftime("%d-%b-%Y")
+            today_fmt = pk_now().strftime("%d-%b-%Y")
             msg = f"Cannot Time-Out: no Time-In recorded today {today_fmt}"
             log.info("=== %s - skipping ===", msg)
             write_status(mode, "skipped", msg)
@@ -681,7 +682,7 @@ def main():
         # trigger, or Google Script) completed it while we were waiting.
         done, done_time = already_done(mode)
         if done:
-            today_fmt = datetime.now().strftime("%d-%b-%Y")
+            today_fmt = pk_now().strftime("%d-%b-%Y")
             msg = f"{label} already posted today {today_fmt} at {done_time} (completed by another trigger while waiting)"
             log.info("=== %s - skipping ===", msg)
             # Not write_status here either - same reason as above.

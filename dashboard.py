@@ -16,6 +16,7 @@ import subprocess
 import sys
 import random
 from datetime import datetime, timedelta
+from pk_time import now as pk_now
 from pathlib import Path
 from urllib.parse import parse_qs, urlsplit
 from flask import (Flask, redirect, url_for, jsonify, request, Response,
@@ -212,9 +213,9 @@ def get_next_workdays(n=5):
     days = []
     # Start at today, not tomorrow. Today belongs on this panel - the one day
     # whose attendance you actually want to see was the one day missing from
-    # it. datetime.now() is Pakistan local time, so today drops off the list
+    # it. pk_now() is Pakistan local time, so today drops off the list
     # only when the PKT day ends at local midnight.
-    d = datetime.now()
+    d = pk_now()
     today_str = d.strftime("%Y-%m-%d")
     status = load_json(STATUS_FILE)
     holidays = load_json(HOLIDAYS_FILE)
@@ -261,7 +262,7 @@ def get_next_workdays(n=5):
 
 def get_upcoming_holidays(n=10):
     data = load_json(HOLIDAYS_FILE)
-    today = datetime.now().strftime("%Y-%m-%d")
+    today = pk_now().strftime("%Y-%m-%d")
     future = [h for h in data.get("holidays", []) if h["date"] >= today]
     future.sort(key=lambda x: x["date"])
     return future[:n]
@@ -269,7 +270,7 @@ def get_upcoming_holidays(n=10):
 
 def get_active_blackouts():
     data = load_json(BLACKOUT_FILE)
-    today = datetime.now().strftime("%Y-%m-%d")
+    today = pk_now().strftime("%Y-%m-%d")
     dates = [d for d in data.get("dates", []) if d["date"] >= today]
     ranges = [r for r in data.get("ranges", []) if r["end"] >= today]
     return dates, ranges
@@ -571,7 +572,7 @@ def action_mark_leave(date):
     for d in data["dates"]:
         if d["date"] == date:
             return redirect(url_for("dashboard", msg=f"Date {date} is already blocked"))
-    entry = {"date": date, "reason": reason, "leave_type": leave_type, "days": days, "added": datetime.now().strftime("%Y-%m-%d %H:%M")}
+    entry = {"date": date, "reason": reason, "leave_type": leave_type, "days": days, "added": pk_now().strftime("%Y-%m-%d %H:%M")}
     data["dates"].append(entry)
     data["dates"].sort(key=lambda d: d["date"])
     save_json(BLACKOUT_FILE, data)
@@ -654,13 +655,13 @@ def action_add_leave():
         for d in data["dates"]:
             if d["date"] == start:
                 return redirect(url_for("dashboard"))
-        data["dates"].append({"date": start, "reason": reason, "added": datetime.now().strftime("%Y-%m-%d %H:%M")})
+        data["dates"].append({"date": start, "reason": reason, "added": pk_now().strftime("%Y-%m-%d %H:%M")})
         data["dates"].sort(key=lambda d: d["date"])
     else:
         for r in data["ranges"]:
             if r["start"] == start and r["end"] == end:
                 return redirect(url_for("dashboard"))
-        data["ranges"].append({"start": start, "end": end, "reason": reason, "added": datetime.now().strftime("%Y-%m-%d %H:%M")})
+        data["ranges"].append({"start": start, "end": end, "reason": reason, "added": pk_now().strftime("%Y-%m-%d %H:%M")})
         data["ranges"].sort(key=lambda r: r["start"])
     save_json(BLACKOUT_FILE, data)
     _sync_blackout_to_cloud()
@@ -805,11 +806,11 @@ def api_action(action_path):
 
 @app.route("/action/timein-now")
 def action_timein_now():
-    today = datetime.now().strftime("%Y-%m-%d")
+    today = pk_now().strftime("%Y-%m-%d")
     status = load_json(STATUS_FILE)
     ti = status.get("timein", {})
     if ti.get("date") == today and ti.get("status") == "success":
-        today_fmt = datetime.now().strftime("%d-%b-%Y")
+        today_fmt = pk_now().strftime("%d-%b-%Y")
         recorded_time = ti.get("action_time") or ti.get("observed_time") or "?"
         return redirect(url_for("dashboard", msg=f"Time-In already posted today {today_fmt} at {recorded_time}"))
     # A dangling prior-day Time-Out is no longer a hard block here -
@@ -822,7 +823,7 @@ def action_timein_now():
 
 @app.route("/action/timeout-now")
 def action_timeout_now():
-    today = datetime.now().strftime("%Y-%m-%d")
+    today = pk_now().strftime("%Y-%m-%d")
     status = load_json(STATUS_FILE)
     ti = status.get("timein", {})
     to = status.get("timeout", {})
@@ -833,10 +834,10 @@ def action_timeout_now():
         and (to.get("date") != ti_date or to.get("status") != "success")
     )
     if not timed_in_today and not pending_prior_day:
-        today_fmt = datetime.now().strftime("%d-%b-%Y")
+        today_fmt = pk_now().strftime("%d-%b-%Y")
         return redirect(url_for("dashboard", msg=f"Cannot Time-Out: you haven't Timed-In today {today_fmt} yet"))
     if to.get("date") == today and to.get("status") == "success":
-        today_fmt = datetime.now().strftime("%d-%b-%Y")
+        today_fmt = pk_now().strftime("%d-%b-%Y")
         recorded_time = to.get("action_time") or to.get("observed_time") or "?"
         return redirect(url_for("dashboard", msg=f"Time-Out already posted today {today_fmt} at {recorded_time}"))
     subprocess.Popen([sys.executable, str(BASE_DIR / "timein_bot.py"), "timeout", "--now"],
@@ -941,8 +942,8 @@ def download_report():
     output = io.StringIO()
     writer = csv.writer(output)
     writer.writerow(["Date", "Day", "Time-In", "Time-Out", "Hours Worked", "Target (9h10m)", "Overtime/Under"])
-    d = datetime.strptime(start, "%Y-%m-%d") if start else datetime.now()
-    end_d = datetime.strptime(end, "%Y-%m-%d") if end else datetime.now()
+    d = datetime.strptime(start, "%Y-%m-%d") if start else pk_now()
+    end_d = datetime.strptime(end, "%Y-%m-%d") if end else pk_now()
     while d <= end_d:
         ds = d.strftime("%Y-%m-%d")
         rec = records.get(ds, {})
@@ -1104,8 +1105,8 @@ def dashboard():
     upcoming = get_upcoming_holidays()
     bl_dates, bl_ranges = get_active_blackouts()
     workdays = get_next_workdays(7)
-    today = datetime.now().strftime("%Y-%m-%d")
-    now = datetime.now().strftime("%H:%M")
+    today = pk_now().strftime("%Y-%m-%d")
+    now = pk_now().strftime("%H:%M")
     msg = request.args.get("msg", "")
     is_error = any(w in msg.lower() for w in ["already", "cannot"]) if msg else False
     toast_html = ""
@@ -1456,11 +1457,14 @@ body{{background:var(--bg);color:var(--text);font-family:-apple-system,system-ui
   </div>
 </div>
 </div><script>
+  // PKT is UTC+5, no DST. Read Pakistan wall-clock even if the viewing
+  // device is set to another timezone.
+  function pkNow(){{var d=new Date();return new Date(d.getTime()+(d.getTimezoneOffset()+300)*60000)}}
 (function(){{
   var t=document.getElementById('toast');
   if(t){{setTimeout(function(){{t.style.transition='opacity .4s';t.style.opacity='0';setTimeout(function(){{t.remove()}},400)}},3500)}}
   setInterval(function(){{
-    var n=new Date();
+    var n=pkNow();
     var hh=String(n.getHours()).padStart(2,'0');
     var mm=String(n.getMinutes()).padStart(2,'0');
     var ss=String(n.getSeconds()).padStart(2,'0');
@@ -1510,7 +1514,7 @@ body{{background:var(--bg);color:var(--text);font-family:-apple-system,system-ui
   // it would hand back the previous day.
   function pad(d){{return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0')}}
   function setRange(n){{
-    var end=new Date();var start=new Date();start.setDate(end.getDate()-n+1);
+    var end=pkNow();var start=pkNow();start.setDate(end.getDate()-n+1);
     document.getElementById('ana-start').value=pad(start);
     document.getElementById('ana-end').value=pad(end);
     loadAnalytics();

@@ -13,6 +13,7 @@ import os
 import uuid
 from pathlib import Path
 from datetime import datetime
+from pk_time import now as pk_now
 
 BASE_DIR = Path(__file__).parent
 DB_FILE = BASE_DIR / "attendance.db"
@@ -75,7 +76,7 @@ def record_event(date_str, mode, status, message, action_time=None,
             "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
             (date_str, mode, status, message, action_time, action_origin,
              observed_time,
-             datetime.now().strftime("%Y-%m-%d %H:%M:%S")),
+             pk_now().strftime("%Y-%m-%d %H:%M:%S")),
         )
         conn.commit()
     finally:
