@@ -51,7 +51,9 @@ nav button.active{color:var(--primary);border-bottom-color:var(--primary)}
 .lb-fill{height:100%;border-radius:2px;transition:width .3s}
 .wd-row{display:flex;align-items:center;padding:.5rem 0;border-bottom:1px solid var(--border)}
 .wd-row:last-child{border:none}
-.wd-day{width:2.2rem;font-size:.75rem;font-weight:600;color:var(--text2)}
+.wd-day{width:3.1rem;font-size:.75rem;font-weight:600;color:var(--text2)}
+.wd-row.wd-today{background:var(--primary-light);border-radius:6px;padding-left:.4rem;padding-right:.4rem}
+.wd-row.wd-today .wd-day{color:var(--primary)}
 .wd-date{flex:1;font-size:.85rem}
 .badge{display:inline-block;padding:.15rem .45rem;border-radius:5px;font-size:.65rem;font-weight:600}
 .badge-ok{background:var(--green);color:#fff}
@@ -399,7 +401,12 @@ const NOTIF_PREF_LABELS = {
   holiday_change: 'Holiday Changes',
 };
 const CACHE_KEY = 'att_cache';
-const today = () => new Date().toISOString().slice(0,10);
+// Every date here is a Pakistan local date. toISOString() renders UTC, which
+// is 5 hours behind PKT, so between 00:00 and 05:00 it reports the PREVIOUS
+// day - dates dropped off these lists before the day had actually ended here.
+const ymd = dt => dt.getFullYear()+'-'+String(dt.getMonth()+1).padStart(2,'0')+'-'+String(dt.getDate()).padStart(2,'0');
+const stamp = dt => ymd(dt)+' '+String(dt.getHours()).padStart(2,'0')+':'+String(dt.getMinutes()).padStart(2,'0');
+const today = () => ymd(new Date());
 const fmt = v => v===Math.floor(v)?Math.floor(v):v;
 const esc = v => String(v == null ? '' : v).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const isIsoDate = v => typeof v === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(v);
@@ -626,14 +633,17 @@ function renderBalance() {
 
 function getNextDays(n) {
   const days = [];
-  const d = new Date(); d.setDate(d.getDate()+1);
+  // Start at today. It stays on the list until the PKT day genuinely ends.
+  const d = new Date();
+  const todayStr = ymd(new Date());
+  const st = S.status || {};
   const holDates = new Set();
   ((S.holidays||{}).holidays||[]).forEach(function(h){if(!h.disabled)holDates.add(h.date)});
   const blEntries = {};
   ((S.blackout||{}).dates||[]).forEach(function(b){blEntries[b.date]=b});
   const wkends = new Set((S.blackout||{}).working_weekends||[]);
   for (let i=0;i<n;i++){
-    const ds = d.toISOString().slice(0,10);
+    const ds = ymd(d);
     const wd = d.getDay();
     const isWkend = wd===0||wd===6;
     let skip = null, badge = 'ok', label = 'Active', cls = 'badge-ok';
@@ -651,7 +661,12 @@ function getNextDays(n) {
     }
     const dayNames = ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'];
     const monthNames = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
-    days.push({date:ds, day:dayNames[wd], label:monthNames[d.getMonth()]+' '+d.getDate(), skip:skip, badge:label, cls:cls, isWkend:isWkend});
+    const isToday = ds===todayStr;
+    if (isToday) {
+      const ti = st.timein || {};
+      if (ti.date===todayStr && ti.status==='success') { skip=null; label='Present'; cls='badge-ok'; }
+    }
+    days.push({date:ds, day:isToday?'Today':dayNames[wd], label:monthNames[d.getMonth()]+' '+d.getDate(), skip:skip, badge:label, cls:cls, isWkend:isWkend, isToday:isToday});
     d.setDate(d.getDate()+1);
   }
   return days;
@@ -662,7 +677,7 @@ function renderForecast() {
   const days = getNextDays(7);
   let h = '';
   days.forEach(function(d){
-    h += '<div class="wd-row"><span class="wd-day">'+d.day+'</span><span class="wd-date">'+d.label+'</span><span class="badge '+d.cls+'">'+d.badge+'</span></div>';
+    h += '<div class="wd-row'+(d.isToday?' wd-today':'')+'"><span class="wd-day">'+d.day+'</span><span class="wd-date">'+d.label+'</span><span class="badge '+d.cls+'">'+d.badge+'</span></div>';
   });
   el.innerHTML = h;
 }
@@ -759,9 +774,9 @@ function getReportRange() {
   let end = document.getElementById('rep-end').value;
   if (!start || !end) {
     const now = new Date();
-    end = now.toISOString().slice(0,10);
+    end = ymd(now);
     const weekAgo = new Date(now); weekAgo.setDate(weekAgo.getDate()-7);
-    start = weekAgo.toISOString().slice(0,10);
+    start = ymd(weekAgo);
     document.getElementById('rep-start').value = start;
     document.getElementById('rep-end').value = end;
   }
@@ -776,7 +791,7 @@ function buildReportRows() {
   const endD = new Date(end+'T12:00:00');
   const dayNames = ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'];
   while (d <= endD) {
-    const ds = d.toISOString().slice(0,10);
+    const ds = ymd(d);
     const rec = records[ds] || {};
     if (rec.timein || rec.timeout) {
       const hours = computeHoursWorked(rec.timein, rec.timeout);
@@ -869,7 +884,7 @@ function openLeaveModal(dateStr) {
 function getNextWorkday() {
   const d = new Date(); d.setDate(d.getDate()+1);
   while (d.getDay()===0||d.getDay()===6) d.setDate(d.getDate()+1);
-  return d.toISOString().slice(0,10);
+  return ymd(d);
 }
 
 function updateLmLabel() {
@@ -914,7 +929,7 @@ async function confirmLeave() {
   showToast('Marking leave...','ok');
 
   // Update local state
-  const entry = {date:dateVal, reason:reason+(half?' (Half Day)':''), leave_type:type, days:days, added:new Date().toISOString().slice(0,16).replace('T',' ')};
+  const entry = {date:dateVal, reason:reason+(half?' (Half Day)':''), leave_type:type, days:days, added:stamp(new Date())};
   if (!S.blackout.dates) S.blackout.dates = [];
   S.blackout.dates.push(entry);
   S.blackout.dates.sort(function(a,b){return a.date.localeCompare(b.date)});
@@ -978,12 +993,12 @@ async function addSkip() {
   if (start === end) {
     const existing = S.blackout.dates.find(function(d){return d.date===start});
     if (existing) { showToast('Date already blocked','error'); return; }
-    S.blackout.dates.push({date:start, reason:reason, added:new Date().toISOString().slice(0,16).replace('T',' ')});
+    S.blackout.dates.push({date:start, reason:reason, added:stamp(new Date())});
     S.blackout.dates.sort(function(a,b){return a.date.localeCompare(b.date)});
   } else {
     const existing = S.blackout.ranges.find(function(r){return r.start===start && r.end===end});
     if (existing) { showToast('Range already added','error'); return; }
-    S.blackout.ranges.push({start:start, end:end, reason:reason, added:new Date().toISOString().slice(0,16).replace('T',' ')});
+    S.blackout.ranges.push({start:start, end:end, reason:reason, added:stamp(new Date())});
     S.blackout.ranges.sort(function(a,b){return a.start.localeCompare(b.start)});
   }
 
@@ -1097,7 +1112,7 @@ async function shiftHoliday(date, offset) {
     if (shouldShift) {
       const d = new Date(h.date+'T12:00:00');
       d.setDate(d.getDate()+offset);
-      h.date = d.toISOString().slice(0,10);
+      h.date = ymd(d);
       if (!h.moon_dependent) h.confirmed = true;
     }
   });

@@ -210,7 +210,13 @@ def _sync_notif_prefs_to_cloud():
 
 def get_next_workdays(n=5):
     days = []
-    d = datetime.now() + timedelta(days=1)
+    # Start at today, not tomorrow. Today belongs on this panel - the one day
+    # whose attendance you actually want to see was the one day missing from
+    # it. datetime.now() is Pakistan local time, so today drops off the list
+    # only when the PKT day ends at local midnight.
+    d = datetime.now()
+    today_str = d.strftime("%Y-%m-%d")
+    status = load_json(STATUS_FILE)
     holidays = load_json(HOLIDAYS_FILE)
     hol_dates = {h["date"] for h in holidays.get("holidays", []) if not h.get("disabled", False)}
     blackout = load_json(BLACKOUT_FILE)
@@ -240,7 +246,15 @@ def get_next_workdays(n=5):
                 if r["start"] <= ds <= r["end"]:
                     skip = "Leave"
                     break
-        days.append({"date": ds, "day": d.strftime("%a"), "label": d.strftime("%b %d"), "skip": skip, "is_weekend": d.weekday() >= 5, "working_weekend": d.weekday() >= 5 and ds in working_wkends})
+        entry = {"date": ds, "day": d.strftime("%a"), "label": d.strftime("%b %d"),
+                 "skip": skip, "is_weekend": d.weekday() >= 5,
+                 "working_weekend": d.weekday() >= 5 and ds in working_wkends,
+                 "is_today": ds == today_str, "attendance": None}
+        if entry["is_today"]:
+            ti = status.get("timein", {})
+            if ti.get("date") == today_str and ti.get("status") == "success":
+                entry["attendance"] = "Present"
+        days.append(entry)
         d += timedelta(days=1)
     return days
 
@@ -951,7 +965,10 @@ def download_report():
 def render_workdays(days):
     rows = []
     for d in days:
-        if d.get("working_weekend"):
+        if d.get("attendance"):
+            # Actually marked in today - that outranks any calendar label.
+            badge = f'<span class="badge ok">{html.escape(str(d["attendance"]))}</span>'
+        elif d.get("working_weekend"):
             badge = '<span class="badge ok">Working</span>'
             badge += f' <a class="btn sm danger" style="padding:.2rem .4rem;font-size:.65rem" href="/action/remove-working-weekend/{d["date"]}">Undo</a>'
         elif d["skip"]:
@@ -961,7 +978,9 @@ def render_workdays(days):
         else:
             badge = '<span class="badge ok">Active</span>'
             badge += ' <a class="btn sm outline" style="padding:.2rem .4rem;font-size:.65rem" href="#" onclick="openLeaveModal(\'' + d["date"] + '\');return false">Leave</a>'
-        rows.append(f'<div class="wd-row"><span class="wd-day">{d["day"]}</span><span class="wd-date">{d["label"]}</span>{badge}</div>')
+        day_label = "Today" if d.get("is_today") else d["day"]
+        row_cls = "wd-row wd-today" if d.get("is_today") else "wd-row"
+        rows.append(f'<div class="{row_cls}"><span class="wd-day">{day_label}</span><span class="wd-date">{d["label"]}</span>{badge}</div>')
     return "\n".join(rows)
 
 def render_holidays(holidays):
@@ -1203,7 +1222,7 @@ body{{background:var(--bg);color:var(--text);font-family:-apple-system,system-ui
 .btn.outline{{background:transparent;color:var(--accent);border:1.5px solid var(--accent)}}
 .btn.danger{{background:var(--fail);color:#fff}}.btn.sm{{padding:.35rem .6rem;font-size:.75rem;border-radius:6px}}.btn.full{{width:100%}}.btn.disabled{{opacity:.4;pointer-events:none;cursor:default}}
 .wd-row{{display:flex;align-items:center;gap:.5rem;padding:.4rem 0;border-bottom:1px solid var(--border)}}.wd-row:last-child{{border-bottom:none}}
-.wd-day{{font-weight:600;width:2.2rem;font-size:.85rem}}.wd-date{{flex:1;font-size:.85rem;color:var(--text2)}}
+.wd-day{{font-weight:600;width:3.2rem;font-size:.85rem}}.wd-row.wd-today{{background:var(--ok-bg);border-radius:6px;padding-left:.4rem;padding-right:.4rem}}.wd-row.wd-today .wd-day{{color:var(--accent)}}.wd-date{{flex:1;font-size:.85rem;color:var(--text2)}}
 .badge{{font-size:.65rem;font-weight:700;padding:.15rem .45rem;border-radius:4px;text-transform:uppercase;letter-spacing:.04em}}
 .badge.ok{{background:var(--ok-bg);color:var(--ok)}}.badge.fail{{background:var(--fail-bg);color:var(--fail)}}.badge.skip{{background:var(--skip-bg);color:var(--skip)}}
 .hol-row{{display:flex;justify-content:space-between;align-items:center;padding:.6rem 0;border-bottom:1px solid var(--border);gap:.5rem}}.hol-row:last-child{{border-bottom:none}}
@@ -1487,7 +1506,9 @@ body{{background:var(--bg);color:var(--text);font-family:-apple-system,system-ui
   var WEEKLY_TARGET=45.83;
   var rawRecords=[];
   var currentView='daily';
-  function pad(d){{var s=d.toISOString().split('T')[0];return s}}
+  // Local (PKT) date - toISOString() is UTC and 5h behind, so before 05:00
+  // it would hand back the previous day.
+  function pad(d){{return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0')}}
   function setRange(n){{
     var end=new Date();var start=new Date();start.setDate(end.getDate()-n+1);
     document.getElementById('ana-start').value=pad(start);
