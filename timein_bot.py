@@ -17,6 +17,7 @@ import sys
 import time
 import logging
 import os
+import subprocess
 from datetime import datetime, timedelta
 from pathlib import Path
 
@@ -560,10 +561,57 @@ def run_and_record(mode, retry_cfg, catchup_date=None):
     return False
 
 
+# A long time.sleep() is the reason attendance kept landing late. WakeToRun on
+# the 08:45/20:00 tasks only guarantees the host is awake when the task STARTS;
+# the randomized target can be an hour later. On battery this host suspends
+# after 5 idle minutes and a sleeping process is not activity, so the target
+# passed mid-suspend and the bot acted whenever the lid was next opened
+# (20:32 target -> acted 20:58). Handing the wait to a one-shot task with
+# WakeToRun makes Windows wake the machine at the randomized instant itself.
+ONESHOT_PREFIX = "TimeInBot_OneShot_"
+INLINE_WAIT_LIMIT = 120  # seconds; below this, suspend is not a real risk
+
+
+def schedule_oneshot(mode, target):
+    """Register a wake-capable one-time task at `target`. True if it took."""
+    task = f"{ONESHOT_PREFIX}{mode}"
+    script = str(Path(__file__).resolve())
+    # Expires shortly after the target so a stale task cannot re-fire, but with
+    # enough slack that a host resuming late still runs it rather than skipping.
+    end = target + timedelta(hours=4)
+    ps = f"""$ErrorActionPreference = 'Stop'
+$a = New-ScheduledTaskAction -Execute '{sys.executable}' -Argument '"{script}" {mode} --scheduled' -WorkingDirectory '{BASE_DIR}'
+$t = New-ScheduledTaskTrigger -Once -At '{target:%Y-%m-%dT%H:%M:%S}'
+$t.EndBoundary = '{end:%Y-%m-%dT%H:%M:%S}'
+$s = New-ScheduledTaskSettingsSet -WakeToRun -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -StartWhenAvailable -ExecutionTimeLimit (New-TimeSpan -Minutes 30) -DeleteExpiredTaskAfter (New-TimeSpan -Minutes 5)
+$s.Priority = 4
+Register-ScheduledTask -TaskName '{task}' -Action $a -Trigger $t -Settings $s -Force | Out-Null
+"""
+    try:
+        r = subprocess.run(
+            ["powershell", "-NoProfile", "-NonInteractive", "-Command", ps],
+            capture_output=True, text=True, timeout=90,
+        )
+    except Exception as e:
+        log.warning("Could not register %s (%s) - falling back to inline wait", task, e)
+        return False
+    if r.returncode != 0:
+        log.warning(
+            "Could not register %s - falling back to inline wait: %s",
+            task, (r.stderr or r.stdout).strip()[:300],
+        )
+        return False
+    log.info("Scheduled wake-capable %s for %s", task, target.strftime("%H:%M:%S"))
+    return True
+
+
 def main():
     mode = sys.argv[1] if len(sys.argv) > 1 else "timein"
     now_flag = "--now" in sys.argv
     fallback_flag = "--fallback" in sys.argv
+    # Fired by the one-shot task at the randomized instant: act now, but
+    # keep every guard the inline path would have re-run after waking.
+    scheduled_flag = "--scheduled" in sys.argv
     if mode not in BUTTON_IDS:
         print(f"Usage: python {Path(__file__).name} [timein|timeout] [--now|--fallback]")
         sys.exit(1)
@@ -606,25 +654,26 @@ def main():
             log.info("=== Exiting (skipped) ===")
             return
 
-        if fallback_flag:
-            # Fallback trigger (GitHub Actions self-hosted runner): runs
-            # right as the local bot's own window closes, with a short
-            # randomized buffer of its own (not firing at a suspiciously
-            # exact instant every day) - second in the hierarchy, local
-            # bot first, this as backup, Google Script last.
-            target, sleep_secs = pick_fallback_target_time(mode)
+        if not scheduled_flag:
+            if fallback_flag:
+                # Fallback trigger (GitHub Actions self-hosted runner): runs
+                # right as the local bot's own window closes, with a short
+                # randomized buffer of its own (not firing at a suspiciously
+                # exact instant every day) - the backup behind the local bot.
+                target, sleep_secs = pick_fallback_target_time(mode)
+                kind = "Fallback target"
+            else:
+                target, sleep_secs = pick_target_time(mode)
+                kind = "Target"
+
+            if sleep_secs > INLINE_WAIT_LIMIT and schedule_oneshot(mode, target):
+                log.info("=== Handed off to one-shot task at %s ===",
+                         target.strftime("%H:%M:%S"))
+                return
+
             log.info(
-                "Fallback target time: %s (sleeping %.1f min)",
-                target.strftime("%H:%M:%S"),
-                sleep_secs / 60,
-            )
-            time.sleep(sleep_secs)
-        else:
-            target, sleep_secs = pick_target_time(mode)
-            log.info(
-                "Target time: %s (sleeping %.1f min)",
-                target.strftime("%H:%M:%S"),
-                sleep_secs / 60,
+                "%s time: %s (sleeping %.1f min)",
+                kind, target.strftime("%H:%M:%S"), sleep_secs / 60,
             )
             time.sleep(sleep_secs)
 

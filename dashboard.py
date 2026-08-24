@@ -106,12 +106,31 @@ def login():
     next_path = request.values.get("next", "/")
     if not next_path.startswith("/") or next_path.startswith("//"):
         next_path = "/"
+    def _sign_in():
+        session.clear()
+        session["dashboard_authenticated"] = True
+        session.permanent = True
+
+    # Token in the query string, so the phone's home-screen shortcut can point
+    # at /login?token=... and re-authenticate itself on every launch. An
+    # installed PWA does not reliably keep its cookie jar between launches (iOS
+    # gives the standalone web app its own storage and evicts it freely), which
+    # is why the session cookie alone kept dropping and the login prompt kept
+    # coming back. The redirect lands on a clean URL so the token is not left in
+    # the address bar or in history; Referrer-Policy: no-referrer already stops
+    # it leaking outbound, and every response is Cache-Control: no-store.
+    if request.method == "GET":
+        supplied = request.args.get("token", "")
+        if supplied and hmac.compare_digest(supplied, _DASHBOARD_AUTH_TOKEN):
+            _sign_in()
+            return redirect(next_path)
+        if supplied:
+            error = "Invalid login token"
+
     if request.method == "POST":
         supplied = request.form.get("token", "")
         if hmac.compare_digest(supplied, _DASHBOARD_AUTH_TOKEN):
-            session.clear()
-            session["dashboard_authenticated"] = True
-            session.permanent = True
+            _sign_in()
             return redirect(next_path)
         error = "Invalid login token"
     error_html = f'<p class="error">{html.escape(error)}</p>' if error else ""
