@@ -462,14 +462,16 @@ def run_and_record(mode, retry_cfg, catchup_date=None):
 def main():
     mode = sys.argv[1] if len(sys.argv) > 1 else "timein"
     now_flag = "--now" in sys.argv
+    fallback_flag = "--fallback" in sys.argv
     if mode not in BUTTON_IDS:
-        print(f"Usage: python {Path(__file__).name} [timein|timeout] [--now]")
+        print(f"Usage: python {Path(__file__).name} [timein|timeout] [--now|--fallback]")
         sys.exit(1)
 
     label = LABELS[mode]
     config = load_config()
     retry_cfg = config["retry"]
-    log.info("=== %s Bot started %s===", label, "(MANUAL) " if now_flag else "")
+    run_kind = "(MANUAL) " if now_flag else ("(FALLBACK) " if fallback_flag else "")
+    log.info("=== %s Bot started %s===", label, run_kind)
 
     done, done_time = already_done(mode)
     if done:
@@ -503,26 +505,33 @@ def main():
             log.info("=== Exiting (skipped) ===")
             return
 
-        target, sleep_secs = pick_target_time(mode)
-        log.info(
-            "Target time: %s (sleeping %.1f min)",
-            target.strftime("%H:%M:%S"),
-            sleep_secs / 60,
-        )
+        if fallback_flag:
+            # Fallback trigger (GitHub Actions self-hosted runner): runs well
+            # after the local bot's own window has closed, specifically so
+            # it acts second in the hierarchy - local bot first, this as
+            # backup, Google Script last. No randomized wait needed since
+            # we're intentionally running late; already_done() at the top
+            # of main() already covers "local bot got there first".
+            log.info("Fallback trigger - checking immediately, no randomized wait")
+        else:
+            target, sleep_secs = pick_target_time(mode)
+            log.info(
+                "Target time: %s (sleeping %.1f min)",
+                target.strftime("%H:%M:%S"),
+                sleep_secs / 60,
+            )
 
-        time.sleep(sleep_secs)
+            time.sleep(sleep_secs)
 
-        # Two independent triggers (Task Scheduler + the GitHub Actions
-        # self-hosted runner) can both wake up in this same window. Re-check
-        # after the sleep so the loser of that race doesn't still perform a
-        # real duplicate action against the portal.
-        done, done_time = already_done(mode)
-        if done:
-            today_fmt = datetime.now().strftime("%d-%b-%Y")
-            msg = f"{label} already posted today {today_fmt} at {done_time} (completed by the other trigger while waiting)"
-            log.info("=== %s - skipping ===", msg)
-            # Not write_status here either - same reason as above.
-            return
+            # Re-check after the sleep in case something else (the fallback
+            # trigger, or Google Script) completed it while we were waiting.
+            done, done_time = already_done(mode)
+            if done:
+                today_fmt = datetime.now().strftime("%d-%b-%Y")
+                msg = f"{label} already posted today {today_fmt} at {done_time} (completed by another trigger while waiting)"
+                log.info("=== %s - skipping ===", msg)
+                # Not write_status here either - same reason as above.
+                return
     else:
         log.info("Manual trigger - running immediately")
 

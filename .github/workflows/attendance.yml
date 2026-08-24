@@ -16,15 +16,23 @@
 # (GitHub doesn't mask arbitrary inputs) - the dashboard encrypts them into
 # GitHub Actions secrets first (masked in logs, encrypted at rest), and this
 # workflow only ever reads them via ${{ secrets.* }}.
+#
+# HIERARCHY: local bot first, this (self-hosted runner) second as a backup,
+# Google Apps Script last. This fires AFTER the local Task Scheduler job's
+# own window closes (not at the same time) and runs with --fallback -
+# immediate check-and-act, no randomized wait - so it only ever does
+# anything if the local bot didn't already get there first.
 
 name: Attendance Bot
 
 on:
   schedule:
-    # Time-In window start: 8:45 AM PKT = 3:45 AM UTC (Mon-Fri)
-    - cron: '45 3 * * 1-5'
-    # Time-Out window start: 8:00 PM PKT = 3:00 PM UTC (Mon-Fri)
-    - cron: '0 15 * * 1-5'
+    # Time-In fallback: 9:20 AM PKT = 4:20 AM UTC (Mon-Fri) - 15 min after
+    # the local bot's own window closes (09:05)
+    - cron: '20 4 * * 1-5'
+    # Time-Out fallback: 9:45 PM PKT = 4:45 PM UTC (Mon-Fri) - 15 min after
+    # the local bot's own window closes (21:30)
+    - cron: '45 16 * * 1-5'
   workflow_dispatch:
     inputs:
       action:
@@ -55,14 +63,14 @@ jobs:
           $inputAction = "${{ github.event.inputs.action }}"
           if ($inputAction -and $inputAction -ne "auto") {
             $mode = $inputAction
-            $nowFlag = "--now"
+            $runFlag = "--now"
           } else {
             $hour = [int](Get-Date -Format "HH")
             if ($hour -lt 12) { $mode = "timein" } else { $mode = "timeout" }
-            $nowFlag = ""
+            $runFlag = "--fallback"
           }
           Add-Content -Path $env:GITHUB_OUTPUT -Value "mode=$mode"
-          Add-Content -Path $env:GITHUB_OUTPUT -Value "now_flag=$nowFlag"
+          Add-Content -Path $env:GITHUB_OUTPUT -Value "run_flag=$runFlag"
 
       - name: Mark attendance
         shell: powershell
@@ -89,5 +97,5 @@ jobs:
           } elseif ($mode -eq "update-windows") {
             python "$base/apply_windows.py"
           } else {
-            python "$base/timein_bot.py" $mode ${{ steps.action.outputs.now_flag }}
+            python "$base/timein_bot.py" $mode ${{ steps.action.outputs.run_flag }}
           }
