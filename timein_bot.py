@@ -243,6 +243,22 @@ def pick_target_time(mode):
     return target, sleep_secs
 
 
+def pick_fallback_target_time(mode, buffer_minutes=10):
+    """Pick a random time within [window_end, window_end + buffer_minutes]
+    for the GitHub Actions fallback trigger - a short randomized buffer
+    right after the local bot's own window closes, so the fallback isn't
+    firing at a suspiciously exact instant every day."""
+    config = load_config()
+    mc = config[mode]
+    today = datetime.now().date()
+    eh, em = parse_time(mc["window_end"])
+    start = datetime(today.year, today.month, today.day, eh, em)
+    offset = random.randint(0, buffer_minutes * 60)
+    target = start + timedelta(seconds=offset)
+    sleep_secs = max(0, (target - datetime.now()).total_seconds())
+    return target, sleep_secs
+
+
 API_URL = "https://portalservice.aku.edu/Service1.svc/json/TimeInTimeOut/"
 
 
@@ -506,13 +522,18 @@ def main():
             return
 
         if fallback_flag:
-            # Fallback trigger (GitHub Actions self-hosted runner): runs well
-            # after the local bot's own window has closed, specifically so
-            # it acts second in the hierarchy - local bot first, this as
-            # backup, Google Script last. No randomized wait needed since
-            # we're intentionally running late; already_done() at the top
-            # of main() already covers "local bot got there first".
-            log.info("Fallback trigger - checking immediately, no randomized wait")
+            # Fallback trigger (GitHub Actions self-hosted runner): runs
+            # right as the local bot's own window closes, with a short
+            # randomized buffer of its own (not firing at a suspiciously
+            # exact instant every day) - second in the hierarchy, local
+            # bot first, this as backup, Google Script last.
+            target, sleep_secs = pick_fallback_target_time(mode)
+            log.info(
+                "Fallback target time: %s (sleeping %.1f min)",
+                target.strftime("%H:%M:%S"),
+                sleep_secs / 60,
+            )
+            time.sleep(sleep_secs)
         else:
             target, sleep_secs = pick_target_time(mode)
             log.info(
@@ -520,18 +541,17 @@ def main():
                 target.strftime("%H:%M:%S"),
                 sleep_secs / 60,
             )
-
             time.sleep(sleep_secs)
 
-            # Re-check after the sleep in case something else (the fallback
-            # trigger, or Google Script) completed it while we were waiting.
-            done, done_time = already_done(mode)
-            if done:
-                today_fmt = datetime.now().strftime("%d-%b-%Y")
-                msg = f"{label} already posted today {today_fmt} at {done_time} (completed by another trigger while waiting)"
-                log.info("=== %s - skipping ===", msg)
-                # Not write_status here either - same reason as above.
-                return
+        # Re-check after the sleep in case something else (the other
+        # trigger, or Google Script) completed it while we were waiting.
+        done, done_time = already_done(mode)
+        if done:
+            today_fmt = datetime.now().strftime("%d-%b-%Y")
+            msg = f"{label} already posted today {today_fmt} at {done_time} (completed by another trigger while waiting)"
+            log.info("=== %s - skipping ===", msg)
+            # Not write_status here either - same reason as above.
+            return
     else:
         log.info("Manual trigger - running immediately")
 

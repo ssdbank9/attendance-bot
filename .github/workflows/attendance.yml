@@ -19,10 +19,12 @@
 #
 # HIERARCHY: local bot first, this (self-hosted runner) second as a backup,
 # Google Apps Script last. This fires right as the local Task Scheduler
-# job's own window closes and runs with --fallback - immediate check-and-
-# act, no randomized wait - so it only ever does anything if the local
-# bot didn't already get there first. Keep these cron times in sync with
-# config.json's timein/timeout window_end if you change the windows.
+# job's own window closes and runs with --fallback, which picks its own
+# random time within [window_end, window_end + 10min] before checking -
+# so it only ever does anything if the local bot didn't already get
+# there first, and doesn't fire at a suspiciously exact instant every
+# day either. Keep these cron times in sync with config.json's
+# timein/timeout window_end if you change the windows.
 
 name: Attendance Bot
 
