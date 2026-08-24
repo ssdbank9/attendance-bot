@@ -27,6 +27,9 @@ CREATE TABLE IF NOT EXISTS events (
     status TEXT NOT NULL CHECK(status IN ('success', 'failed', 'skipped')),
     message TEXT,
     action_time TEXT,
+    action_origin TEXT NOT NULL DEFAULT 'bot'
+        CHECK(action_origin IN ('bot', 'preexisting', 'unknown')),
+    observed_time TEXT,
     recorded_at TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_events_date_mode ON events(date, mode);
@@ -46,21 +49,32 @@ def init_db():
     conn = get_connection()
     try:
         conn.executescript(SCHEMA)
+        columns = {row[1] for row in conn.execute("PRAGMA table_info(events)")}
+        if "action_origin" not in columns:
+            conn.execute(
+                "ALTER TABLE events ADD COLUMN action_origin TEXT NOT NULL "
+                "DEFAULT 'bot' CHECK(action_origin IN ('bot', 'preexisting', 'unknown'))"
+            )
+        if "observed_time" not in columns:
+            conn.execute("ALTER TABLE events ADD COLUMN observed_time TEXT")
         conn.commit()
     finally:
         conn.close()
 
 
-def record_event(date_str, mode, status, message, action_time=None):
+def record_event(date_str, mode, status, message, action_time=None,
+                 action_origin="bot", observed_time=None):
     """Insert one event row. This is the ONLY write path - nothing else
     should ever write to events directly."""
     init_db()
     conn = get_connection()
     try:
         conn.execute(
-            "INSERT INTO events (date, mode, status, message, action_time, recorded_at) "
-            "VALUES (?, ?, ?, ?, ?, ?)",
-            (date_str, mode, status, message, action_time,
+            "INSERT INTO events (date, mode, status, message, action_time, "
+            "action_origin, observed_time, recorded_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            (date_str, mode, status, message, action_time, action_origin,
+             observed_time,
              datetime.now().strftime("%Y-%m-%d %H:%M:%S")),
         )
         conn.commit()
@@ -104,7 +118,8 @@ def get_recent_action_times(mode, before_date, limit=14):
                 SELECT date, action_time,
                        ROW_NUMBER() OVER (PARTITION BY date ORDER BY id DESC) as rn
                 FROM events
-                WHERE mode=? AND status='success' AND action_time IS NOT NULL AND date < ?
+                WHERE mode=? AND status='success' AND action_time IS NOT NULL
+                  AND action_origin='bot' AND date < ?
             ) WHERE rn = 1
             ORDER BY date DESC LIMIT ?
             """,
@@ -125,7 +140,7 @@ def get_history_range(start_date, end_date):
         rows = conn.execute(
             "SELECT date, mode, action_time FROM events "
             "WHERE status='success' AND action_time IS NOT NULL "
-            "AND date >= ? AND date <= ? ORDER BY id ASC",
+            "AND action_origin='bot' AND date >= ? AND date <= ? ORDER BY id ASC",
             (start_date, end_date),
         ).fetchall()
         records = {}
@@ -167,9 +182,12 @@ def export_status_json():
             "status": row["status"],
             "message": row["message"],
             "timestamp": row["recorded_at"],
+            "action_origin": row.get("action_origin", "unknown"),
         }
         if row["action_time"]:
             entry["action_time"] = row["action_time"]
+        if row.get("observed_time"):
+            entry["observed_time"] = row["observed_time"]
         out[mode] = entry
 
     _atomic_write_json(STATUS_FILE, out)
@@ -183,7 +201,8 @@ def export_history_json():
     try:
         rows = conn.execute(
             "SELECT date, mode, action_time FROM events "
-            "WHERE status='success' AND action_time IS NOT NULL ORDER BY id ASC"
+            "WHERE status='success' AND action_time IS NOT NULL "
+            "AND action_origin='bot' ORDER BY id ASC"
         ).fetchall()
     finally:
         conn.close()

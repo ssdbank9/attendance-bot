@@ -1,6 +1,8 @@
 """
-Cloud sync module - syncs credentials and settings to GitHub Actions and Google Apps Script.
-Called automatically when settings change in the dashboard.
+Cloud sync module for non-secret settings and status files.
+
+Attendance and portal credentials are deliberately local-only. They are not
+written to repository files or GitHub Actions secrets by this module.
 """
 import json
 import base64
@@ -10,6 +12,14 @@ from pathlib import Path
 log = logging.getLogger("cloud_sync")
 BASE_DIR = Path(__file__).parent
 CONFIG_FILE = BASE_DIR / "config.json"
+SYNCABLE_REPOSITORY_FILES = {
+    "blackout.json",
+    "bot_config.json",
+    "holidays.json",
+    "leave_balance.json",
+    "notification_prefs.json",
+    "timein_status.json",
+}
 
 
 def load_config():
@@ -32,51 +42,19 @@ def _gh_headers(token):
     }
 
 
-def _encrypt_secret(public_key_b64, secret_value):
-    from nacl import encoding, public as nacl_public
-    pk_bytes = base64.b64decode(public_key_b64)
-    sealed = nacl_public.SealedBox(nacl_public.PublicKey(pk_bytes))
-    encrypted = sealed.encrypt(secret_value.encode("utf-8"))
-    return base64.b64encode(encrypted).decode("utf-8")
-
-
-def sync_github_secret(repo, token, secret_name, secret_value):
-    import requests
-    headers = _gh_headers(token)
-    key_url = f"https://api.github.com/repos/{repo}/actions/secrets/public-key"
-    resp = requests.get(key_url, headers=headers, timeout=15)
-    if resp.status_code != 200:
-        return False, f"Public key fetch failed: HTTP {resp.status_code}"
-
-    key_data = resp.json()
-    encrypted = _encrypt_secret(key_data["key"], secret_value)
-
-    secret_url = f"https://api.github.com/repos/{repo}/actions/secrets/{secret_name}"
-    payload = {"encrypted_value": encrypted, "key_id": key_data["key_id"]}
-    resp = requests.put(secret_url, json=payload, headers=headers, timeout=15)
-    if resp.status_code in (201, 204):
-        return True, "OK"
-    return False, f"HTTP {resp.status_code}"
-
-
-def sync_github_credentials(user_id=None, password=None):
-    sync = get_sync_config().get("github", {})
-    repo = sync.get("repo", "").strip()
-    token = sync.get("token", "").strip()
+def test_github_connection():
+    """Validate repository access without uploading files or secrets."""
+    repo, token = _gh_config()
     if not repo or not token:
         return False, "GitHub not configured"
-
-    results = []
-    ok_all = True
-    if user_id:
-        ok, msg = sync_github_secret(repo, token, "AKU_USER_ID", user_id)
-        results.append(f"User ID: {msg}")
-        ok_all = ok_all and ok
-    if password:
-        ok, msg = sync_github_secret(repo, token, "AKU_PASSWORD", password)
-        results.append(f"Password: {msg}")
-        ok_all = ok_all and ok
-    return ok_all, "; ".join(results)
+    import requests
+    resp = requests.get(
+        f"https://api.github.com/repos/{repo}",
+        headers=_gh_headers(token), timeout=15,
+    )
+    if resp.status_code == 200:
+        return True, "Repository access confirmed"
+    return False, f"GitHub returned HTTP {resp.status_code}"
 
 
 def sync_github_workflow_timing(timein_end, timeout_end):
@@ -154,7 +132,9 @@ def _gh_config():
 
 
 def sync_github_file(file_name, content_str, commit_msg="Auto-sync from dashboard"):
-    """Push a file to the GitHub repo."""
+    """Push an explicitly allowlisted, non-secret file to the GitHub repo."""
+    if file_name not in SYNCABLE_REPOSITORY_FILES:
+        return False, "File is not approved for repository sync"
     import requests
     repo, token = _gh_config()
     if not repo or not token:
@@ -320,14 +300,10 @@ def push_all():
 # ---- Combined sync ----
 
 def sync_credentials(user_id=None, password=None):
-    """Sync credentials to all configured cloud services."""
-    results = {}
-
-    gh_ok, gh_msg = sync_github_credentials(user_id, password)
-    results["github"] = {"ok": gh_ok, "message": gh_msg}
-
-    log.info("Cloud sync credentials: GitHub=%s", gh_msg)
-    return results
+    """Compatibility shim that intentionally performs no remote secret write."""
+    message = "Remote credential sync is disabled; credentials remain local"
+    log.warning(message)
+    return {"github": {"ok": False, "message": message}}
 
 
 def sync_time_windows(timein_end, timeout_end):

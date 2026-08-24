@@ -1,8 +1,6 @@
 """Apply new portal (one.aku.edu) credentials from NEW_PORTAL_USER/
-NEW_PORTAL_PASSWORD env vars. Same pattern as apply_credentials.py -
-run by attendance.yml (action=update-portal), values come from GitHub
-Actions secrets set by the git dashboard. Mirrors dashboard.py's
-/action/update-portal route.
+NEW_PORTAL_PASSWORD environment variables. The GitHub workflow deliberately
+does not invoke this helper or transport credentials.
 """
 import json
 import os
@@ -29,8 +27,8 @@ def main():
         json.dump(config, f, indent=2)
 
     from notify import notify
-    notify(f"Portal credentials updated. Username: {new_user}", title="Portal Updated", tags="key")
-    print(f"Portal credentials updated for username={new_user}")
+    notify("Portal credentials updated locally.", title="Portal Updated", tags="key")
+    print("Portal credentials updated locally")
 
 
 if __name__ == "__main__":

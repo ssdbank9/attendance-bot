@@ -193,12 +193,23 @@ def create_scheduled_tasks():
             print(f"    Run manually as admin if needed.")
 
     print(f"\n  Creating: TimeInBot_Dashboard (at logon)")
-    dash_cmd = (
-        f'schtasks /Create /TN "TimeInBot_Dashboard" '
-        f'/TR "{python_exe} {bot_dir}\\dashboard.py" '
-        f'/SC ONLOGON /F /RL HIGHEST'
+    launcher = BASE_DIR / "start_dashboard.ps1"
+    dash_action = (
+        "powershell.exe -NoProfile -NonInteractive -WindowStyle Hidden "
+        f'-ExecutionPolicy Bypass -File "{launcher}"'
     )
-    result = subprocess.run(dash_cmd, shell=True, capture_output=True, text=True)
+    result = subprocess.run(
+        [
+            "schtasks", "/Create",
+            "/TN", "TimeInBot_Dashboard",
+            "/TR", dash_action,
+            "/SC", "ONLOGON",
+            "/F",
+            "/RL", "LIMITED",
+        ],
+        capture_output=True,
+        text=True,
+    )
     if result.returncode == 0:
         print(f"    OK")
     else:

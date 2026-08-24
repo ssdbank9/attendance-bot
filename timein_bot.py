@@ -76,12 +76,16 @@ def parse_time(t_str):
     return int(parts[0]), int(parts[1])
 
 
-def write_status(mode, status, message, action_time=None, date_str=None):
+def write_status(mode, status, message, action_time=None, date_str=None,
+                 action_origin="bot", observed_time=None):
     """Record an event in attendance.db (the single source of truth) and
     have it regenerate timein_status.json/timein_history.json from there -
     dashboard.py/cloud_sync.py/notify.py keep reading those files unchanged."""
     day = date_str or datetime.now().strftime("%Y-%m-%d")
-    db.record_event(day, mode, status, message, action_time)
+    db.record_event(
+        day, mode, status, message, action_time,
+        action_origin=action_origin, observed_time=observed_time,
+    )
 
     try:
         from cloud_sync import sync_status
@@ -89,15 +93,38 @@ def write_status(mode, status, message, action_time=None, date_str=None):
     except Exception:
         pass
 
-    if status == "success" and action_time:
-        check_time_diversity(mode, day, action_time)
+    if status == "success":
+        check_time_diversity(
+            mode, day, action_time,
+            action_origin=action_origin, observed_time=observed_time,
+        )
 
 
-def check_time_diversity(mode, day, action_time):
-    """Alert if this marked time is identical to any of the last 14 days'
-    marked time for the same mode - a sign randomization was bypassed,
-    e.g. by another automation (a leftover Google Apps Script trigger,
-    etc.) firing at a fixed clock time instead of our own bot."""
+def check_time_diversity(mode, day, action_time, action_origin="bot",
+                         observed_time=None):
+    """Distinguish a repeated bot-owned time from a pre-existing portal entry."""
+    label = LABELS[mode]
+    if action_origin == "preexisting":
+        portal_time = observed_time or "an unknown time"
+        log.warning(
+            "Anomaly: %s was already present in the portal at %s before the "
+            "bot acted - pre-empted by another actor; bot randomization was "
+            "not bypassed",
+            label, portal_time,
+        )
+        try:
+            notify(
+                f"{label} was already present in the portal at {portal_time} "
+                "before this bot acted. Another actor pre-empted the bot; "
+                "the bot's randomized time was not recorded as the action time.",
+                title="Attendance Pre-empted", priority="high", tags="warning",
+            )
+        except Exception:
+            pass
+        return
+
+    if not action_time:
+        return
     try:
         recent = db.get_recent_action_times(mode, day, limit=14)
     except Exception:
@@ -105,12 +132,15 @@ def check_time_diversity(mode, day, action_time):
     dup_date = next((d for d, t in recent if t == action_time), None)
     if not dup_date:
         return
-    label = LABELS[mode]
-    log.warning("Anomaly: %s marked at %s is identical to %s - randomization may have been bypassed", label, action_time, dup_date)
+    log.warning(
+        "Anomaly: bot-owned %s action at %s is identical to %s - the bot's "
+        "randomization may have been bypassed",
+        label, action_time, dup_date,
+    )
     try:
         notify(
-            f"{label} marked at {action_time} - identical to {dup_date}. "
-            f"Randomization may not be working (another automation could be firing at a fixed time).",
+            f"The bot's own {label} action at {action_time} is identical to "
+            f"{dup_date}. The bot's randomization may have been bypassed.",
             title="Time Anomaly Detected", priority="high", tags="warning",
         )
     except Exception:
@@ -155,7 +185,7 @@ def already_done(mode):
     today_str = datetime.now().strftime("%Y-%m-%d")
     prev = db.get_latest(mode, today_str)
     if prev and prev["status"] == "success":
-        return True, prev.get("action_time") or "?"
+        return True, prev.get("action_time") or prev.get("observed_time") or "?"
     return False, None
 
 
@@ -262,26 +292,49 @@ def pick_fallback_target_time(mode, buffer_minutes=10):
 API_URL = "https://portalservice.aku.edu/Service1.svc/json/TimeInTimeOut/"
 
 
-def parse_aku_time(message, label):
-    """Extract the real HH:MM:SS AKU reports for "Time In"/"Time Out" (or
-    "Timed In"/"Timed Out") from its response text, e.g. "Time In: Fri,
-    Aug 21, 2026 - 8:05 AM PST" -> "08:05:00". label is "In" or "Out".
-    Returns None if that field isn't present in the message. AKU's own
-    timestamp is more accurate than our local clock at the moment we
-    happened to check - especially when another automation (e.g. a
-    leftover Google Apps Script trigger) completed the action earlier."""
+def _aku_message_text(message):
     if isinstance(message, list):
         message = message[0] if message else ""
-    pattern = r"Timed?\s+" + label + r":\s*\w+,\s*\w+\s+\d{1,2},\s*\d{4}\s*-\s*(\d{1,2}):(\d{2})\s*([AP]M)"
+    return message or ""
+
+
+def parse_aku_datetime(message, label):
+    """Parse a portal-reported local date/time for the requested field.
+
+    The service labels these values ``PST``, but its clock matches Pakistan
+    local time used by the scheduler; no Pacific-time conversion is applied.
+    The portal only reports minute precision, so this timestamp is evidence
+    about an existing portal record, not a replacement for a bot-owned action
+    time with seconds.
+    """
+    message = _aku_message_text(message)
+    pattern = (
+        r"Timed?\s+" + label
+        + r":\s*\w+,\s*(\w+\s+\d{1,2},\s*\d{4})\s*-\s*"
+          r"(\d{1,2}:\d{2}\s*[AP]M)(?:\s+[A-Z]{2,5})?"
+    )
     m = re.search(pattern, message, re.IGNORECASE)
     if not m:
         return None
-    hour, minute, ampm = int(m.group(1)), int(m.group(2)), m.group(3).upper()
-    if ampm == "PM" and hour != 12:
-        hour += 12
-    if ampm == "AM" and hour == 12:
-        hour = 0
-    return f"{hour:02d}:{minute:02d}:00"
+    try:
+        return datetime.strptime(f"{m.group(1)} {m.group(2)}", "%b %d, %Y %I:%M %p")
+    except ValueError:
+        return None
+
+
+def parse_aku_time(message, label):
+    """Return a portal-reported time as HH:MM:00, or None."""
+    portal_dt = parse_aku_datetime(message, label)
+    return portal_dt.strftime("%H:%M:%S") if portal_dt else None
+
+
+def portal_entry_predates_attempt(message, label, attempted_at):
+    """True when a minute-precision portal record clearly predates this bot."""
+    portal_dt = parse_aku_datetime(message, label)
+    if not portal_dt or not attempted_at:
+        return False
+    attempted_minute = attempted_at.replace(second=0, microsecond=0)
+    return portal_dt < attempted_minute
 
 
 def classify_aku_message(message):
@@ -327,17 +380,25 @@ def run_action(mode):
 
     log.info("[%s] Calling API %s", label, API_URL)
     try:
+        attempted_at = datetime.now()
         ok, message = call_aku_api(mode, creds["user_id"], creds["password"])
         if ok:
             field = "In" if mode == "timein" else "Out"
-            real_time = parse_aku_time(message, field)
-            now = real_time or datetime.now().strftime("%H:%M:%S")
+            portal_time = parse_aku_time(message, field)
+            if portal_time and portal_entry_predates_attempt(message, field, attempted_at):
+                log.warning(
+                    "%s portal entry at %s predates this API attempt; treating "
+                    "it as pre-existing",
+                    label, portal_time,
+                )
+                return True, portal_time, "preexisting"
+            now = datetime.now().strftime("%H:%M:%S")
             log.info("%s complete at %s (API: %s)", label, now, message)
-            return True, now
-        return False, message
+            return True, now, "bot"
+        return False, message, "unknown"
     except Exception as e:
         log.exception("%s API call failed", label)
-        return False, str(e)
+        return False, str(e), "unknown"
 
 
 def run_action_selenium(mode):
@@ -351,6 +412,7 @@ def run_action_selenium(mode):
     button_id = BUTTON_IDS[mode]
 
     driver = None
+    attempted_at = None
     try:
         log.info("[%s] (Selenium fallback) Opening %s", label, HTML_FILE.as_uri())
         options = Options()
@@ -370,12 +432,13 @@ def run_action_selenium(mode):
         log.info("Entered Password")
 
         button = wait.until(EC.element_to_be_clickable((By.ID, button_id)))
+        attempted_at = datetime.now()
         button.click()
         log.info("Clicked %s", label)
         time.sleep(3)
     except Exception as e:
         log.exception("%s Selenium click failed", label)
-        return False, str(e)
+        return False, str(e), "unknown"
     finally:
         if driver:
             driver.quit()
@@ -391,7 +454,7 @@ def run_action_selenium(mode):
         ok, message = call_aku_api(mode, user_id, password)
     except Exception as e:
         log.exception("%s post-click API verification failed", label)
-        return False, f"Clicked but could not verify: {e}"
+        return False, f"Clicked but could not verify: {e}", "unknown"
 
     if not ok:
         # Can happen when another automation (e.g. a leftover Google Apps
@@ -405,32 +468,43 @@ def run_action_selenium(mode):
                 _, other_message = call_aku_api("timein", user_id, password)
                 real_time = parse_aku_time(other_message, "Out")
                 if real_time:
-                    log.info("%s already completed by another actor - confirmed via reconciliation: %s", label, other_message)
-                    return True, real_time
+                    if portal_entry_predates_attempt(other_message, "Out", attempted_at):
+                        log.info("%s already completed by another actor - confirmed via reconciliation: %s", label, other_message)
+                        return True, real_time, "preexisting"
+                    now = datetime.now().strftime("%H:%M:%S")
+                    log.info("%s completed by this Selenium attempt - confirmed via reconciliation: %s", label, other_message)
+                    return True, now, "bot"
             except Exception:
                 pass
         log.warning("%s clicked but API verification says: %s", label, message)
-        return False, f"Clicked but not confirmed ({message})"
+        return False, f"Clicked but not confirmed ({message})", "unknown"
 
     field = "In" if mode == "timein" else "Out"
-    real_time = parse_aku_time(message, field)
-    now = real_time or datetime.now().strftime("%H:%M:%S")
+    portal_time = parse_aku_time(message, field)
+    if portal_time and portal_entry_predates_attempt(message, field, attempted_at):
+        log.warning(
+            "%s portal entry at %s predates the Selenium click; treating it "
+            "as pre-existing",
+            label, portal_time,
+        )
+        return True, portal_time, "preexisting"
+    now = datetime.now().strftime("%H:%M:%S")
     log.info("%s complete at %s (Selenium, verified: %s)", label, now, message)
-    return True, now
+    return True, now, "bot"
 
 
 def attempt_action(mode, retry_cfg):
     """Run the retry loop for a mode (Selenium primary, optional direct API
-    first). Returns (success, detail)."""
+    first). Returns (success, detail, action_origin)."""
     max_attempts = retry_cfg["max_attempts"]
     retry_delay = retry_cfg["delay_seconds"]
 
     if USE_DIRECT_API:
         for attempt in range(1, max_attempts + 1):
             log.info("Attempt %d/%d (API)", attempt, max_attempts)
-            success, detail = run_action(mode)
+            success, detail, action_origin = run_action(mode)
             if success:
-                return True, detail
+                return True, detail, action_origin
             log.warning("Attempt %d failed: %s", attempt, detail)
             if attempt < max_attempts:
                 log.info("Retrying in %d seconds...", retry_delay)
@@ -439,31 +513,42 @@ def attempt_action(mode, retry_cfg):
 
     for attempt in range(1, max_attempts + 1):
         log.info("Attempt %d/%d (Selenium)", attempt, max_attempts)
-        success, detail = run_action_selenium(mode)
+        success, detail, action_origin = run_action_selenium(mode)
         if success:
-            return True, detail
+            return True, detail, action_origin
         log.warning("Attempt %d failed: %s", attempt, detail)
         if attempt < max_attempts:
             log.info("Retrying in %d seconds...", retry_delay)
             time.sleep(retry_delay)
 
-    return False, f"FAILED after {max_attempts} attempts"
+    return False, f"FAILED after {max_attempts} attempts", "unknown"
 
 
 def run_and_record(mode, retry_cfg, catchup_date=None):
     """Run attempt_action for mode, write status, notify. Returns success."""
     label = LABELS[mode]
-    success, detail = attempt_action(mode, retry_cfg)
+    success, detail, action_origin = attempt_action(mode, retry_cfg)
 
     if success:
-        if catchup_date:
+        if action_origin == "preexisting":
+            msg = f"{label} was already present before this bot acted (portal reported {detail})"
+        elif catchup_date:
             missed_fmt = datetime.strptime(catchup_date, "%Y-%m-%d").strftime("%d-%b-%Y")
             msg = f"{label} marked at {detail} (completed pending {missed_fmt})"
         else:
             msg = f"{label} marked at {detail}"
         log.info(msg)
-        write_status(mode, "success", msg, action_time=detail, date_str=catchup_date)
-        notify_status(mode, detail)
+        if action_origin == "preexisting":
+            write_status(
+                mode, "success", msg, action_time=None, date_str=catchup_date,
+                action_origin="preexisting", observed_time=detail,
+            )
+        else:
+            write_status(
+                mode, "success", msg, action_time=detail, date_str=catchup_date,
+                action_origin="bot",
+            )
+            notify_status(mode, detail)
         log.info("=== Done ===")
         return True
 

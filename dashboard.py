@@ -5,14 +5,21 @@ Provides status view, quick actions, holiday/blackout management, analytics.
 """
 
 import csv
+import hashlib
+import hmac
+import html
 import io
 import json
+import os
+import secrets
 import subprocess
 import sys
 import random
 from datetime import datetime, timedelta
 from pathlib import Path
-from flask import Flask, redirect, url_for, jsonify, request, Response, send_from_directory
+from urllib.parse import parse_qs, urlsplit
+from flask import (Flask, redirect, url_for, jsonify, request, Response,
+                   send_from_directory, session)
 
 BASE_DIR = Path(__file__).parent
 CONFIG_FILE = BASE_DIR / "config.json"
@@ -21,8 +28,112 @@ HOLIDAYS_FILE = BASE_DIR / "holidays.json"
 BLACKOUT_FILE = BASE_DIR / "blackout.json"
 HISTORY_FILE = BASE_DIR / "timein_history.json"
 NOTIF_PREFS_FILE = BASE_DIR / "notification_prefs.json"
+AUTH_TOKEN_FILE = BASE_DIR / ".dashboard_auth_token"
 
 app = Flask(__name__)
+app.config.update(
+    SESSION_COOKIE_HTTPONLY=True,
+    SESSION_COOKIE_SAMESITE="Strict",
+    PERMANENT_SESSION_LIFETIME=timedelta(days=30),
+)
+
+
+def _load_or_create_auth_token():
+    """Load the dashboard token without ever emitting it to logs or HTML."""
+    env_token = os.environ.get("ATTENDANCE_DASHBOARD_TOKEN", "").strip()
+    if env_token:
+        if len(env_token) < 16:
+            raise RuntimeError("ATTENDANCE_DASHBOARD_TOKEN must contain at least 16 characters")
+        return env_token
+
+    if AUTH_TOKEN_FILE.exists():
+        token = AUTH_TOKEN_FILE.read_text(encoding="utf-8").strip()
+        if token:
+            if len(token) < 16:
+                raise RuntimeError("Dashboard authentication token is too short")
+            return token
+
+    token = secrets.token_urlsafe(32)
+    try:
+        with open(AUTH_TOKEN_FILE, "x", encoding="utf-8") as f:
+            f.write(token)
+        try:
+            os.chmod(AUTH_TOKEN_FILE, 0o600)
+        except OSError:
+            pass
+        print(f"Dashboard login token created in {AUTH_TOKEN_FILE.name}; read it locally to sign in.")
+        return token
+    except FileExistsError:
+        token = AUTH_TOKEN_FILE.read_text(encoding="utf-8").strip()
+        if token:
+            if len(token) < 16:
+                raise RuntimeError("Dashboard authentication token is too short")
+            return token
+        raise RuntimeError("Dashboard authentication token file is empty")
+
+
+_DASHBOARD_AUTH_TOKEN = _load_or_create_auth_token()
+app.secret_key = hashlib.sha256(
+    ("attendance-dashboard-session:" + _DASHBOARD_AUTH_TOKEN).encode("utf-8")
+).digest()
+
+
+@app.before_request
+def require_dashboard_authentication():
+    """Protect every dashboard route except the login entry point itself."""
+    if request.endpoint == "login":
+        return None
+    if session.get("dashboard_authenticated") is True:
+        return None
+    if request.path.startswith("/api/"):
+        return jsonify({"ok": False, "msg": "Authentication required"}), 401
+    next_path = request.full_path if request.query_string else request.path
+    return redirect(url_for("login", next=next_path))
+
+
+@app.after_request
+def add_dashboard_security_headers(response):
+    response.headers["Cache-Control"] = "no-store"
+    response.headers["X-Content-Type-Options"] = "nosniff"
+    response.headers["X-Frame-Options"] = "DENY"
+    response.headers["Referrer-Policy"] = "no-referrer"
+    return response
+
+
+@app.route("/login", methods=["GET", "POST"])
+def login():
+    error = ""
+    next_path = request.values.get("next", "/")
+    if not next_path.startswith("/") or next_path.startswith("//"):
+        next_path = "/"
+    if request.method == "POST":
+        supplied = request.form.get("token", "")
+        if hmac.compare_digest(supplied, _DASHBOARD_AUTH_TOKEN):
+            session.clear()
+            session["dashboard_authenticated"] = True
+            session.permanent = True
+            return redirect(next_path)
+        error = "Invalid login token"
+    error_html = f'<p class="error">{html.escape(error)}</p>' if error else ""
+    safe_next = html.escape(next_path, quote=True)
+    return f"""<!doctype html>
+<html><head><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Attendance Dashboard Login</title><style>
+body{{font-family:system-ui;background:#f1f5f1;margin:0;display:grid;place-items:center;min-height:100vh}}
+form{{background:white;padding:1.5rem;border-radius:12px;box-shadow:0 4px 20px #0002;width:min(86vw,360px)}}
+input,button{{box-sizing:border-box;width:100%;padding:.75rem;margin-top:.65rem;font:inherit}}
+button{{background:#2d5f2e;color:white;border:0;border-radius:7px;font-weight:700}}
+.error{{color:#a11}}</style></head><body><form method="post">
+<h2>Attendance Dashboard</h2><p>Enter the login token stored on the dashboard computer.</p>
+{error_html}<input type="password" name="token" autocomplete="current-password" required autofocus>
+<input type="hidden" name="next" value="{safe_next}"><button type="submit">Sign in</button>
+</form></body></html>"""
+
+
+@app.route("/logout")
+def logout():
+    session.clear()
+    return redirect(url_for("login"))
 
 STATIC_DIR = BASE_DIR / "static"
 
@@ -282,13 +393,8 @@ def action_update_credentials():
     config["credentials"]["password"] = new_pw
     save_json(CONFIG_FILE, config)
     from notify import notify
-    notify(f"Credentials updated. User ID: {new_uid}", title="Credentials Changed", tags="key")
-    try:
-        from cloud_sync import sync_credentials
-        sync_credentials(user_id=new_uid, password=new_pw)
-    except Exception:
-        pass
-    return redirect(url_for("dashboard", msg="Credentials saved + synced to cloud"))
+    notify("Attendance credentials updated locally.", title="Credentials Changed", tags="key")
+    return redirect(url_for("dashboard", msg="Credentials saved locally; remote secret sync is disabled"))
 
 @app.route("/action/update-portal", methods=["POST"])
 def action_update_portal():
@@ -303,7 +409,7 @@ def action_update_portal():
     config["portal"]["password"] = new_pw
     save_json(CONFIG_FILE, config)
     from notify import notify
-    notify(f"Portal credentials updated. Username: {new_user}", title="Portal Updated", tags="key")
+    notify("Portal credentials updated locally.", title="Portal Updated", tags="key")
     return redirect(url_for("dashboard", msg="Portal credentials saved"))
 
 @app.route("/action/update-windows", methods=["POST"])
@@ -445,6 +551,7 @@ def action_mark_leave(date):
 
 @app.route("/action/cancel-leave/<date>")
 def action_cancel_leave(date):
+    config = load_config()
     data = load_json(BLACKOUT_FILE)
     removed = None
     new_dates = []
@@ -453,18 +560,19 @@ def action_cancel_leave(date):
             removed = d
         else:
             new_dates.append(d)
+    if not removed:
+        return redirect(url_for("dashboard", msg=f"No leave entry found for {date}"))
+
     data["dates"] = new_dates
     save_json(BLACKOUT_FILE, data)
     _sync_blackout_to_cloud()
-    if removed:
-        config = load_config()
-        lb = config.get("leave_balance", {})
-        lt = removed.get("leave_type")
-        days = removed.get("days", 1)
-        if lt and lt in lb:
-            val = lb[lt].get("remaining", 0) + days
-            lb[lt]["remaining"] = int(val) if val == int(val) else val
-            save_json(CONFIG_FILE, config)
+    lb = config.get("leave_balance", {})
+    lt = removed.get("leave_type")
+    days = removed.get("days", 1)
+    if lt and lt in lb:
+        val = lb[lt].get("remaining", 0) + days
+        lb[lt]["remaining"] = int(val) if val == int(val) else val
+        save_json(CONFIG_FILE, config)
     _write_leave_balance(config)
     _sync_leave_balance_to_cloud()
     from notify import notify
@@ -631,14 +739,36 @@ def api_toggle_pause():
 
 @app.route("/api/action/<path:action_path>")
 def api_action(action_path):
-    """AJAX wrapper - calls the action and returns JSON instead of redirect."""
-    import werkzeug.test
-    with app.test_client() as client:
-        resp = client.get(f"/action/{action_path}", follow_redirects=True)
-        msg = ""
-        if b"msg=" in resp.request.url.encode() if hasattr(resp, "request") else False:
-            msg = "Done"
-        return jsonify({"ok": True, "msg": f"Done"})
+    """Run only explicitly supported no-argument actions and return their result."""
+    allowed_actions = {
+        "sync-from-cloud": "action_sync_from_cloud",
+        "push-to-cloud": "action_push_to_cloud",
+        "toggle-pause": "action_toggle_pause",
+        "timein-now": "action_timein_now",
+        "timeout-now": "action_timeout_now",
+        "test-cloud-sync": "action_test_cloud_sync",
+    }
+    endpoint = allowed_actions.get(action_path)
+    if not endpoint:
+        return jsonify({"ok": False, "msg": "Action is not allowed"}), 404
+
+    try:
+        response = app.make_response(app.view_functions[endpoint]())
+    except Exception:
+        return jsonify({"ok": False, "msg": "Action failed"}), 500
+
+    payload = response.get_json(silent=True)
+    if isinstance(payload, dict):
+        ok = bool(payload.get("ok", response.status_code < 400))
+        msg = str(payload.get("msg") or payload.get("message") or "Action completed")
+        return jsonify({"ok": ok, "msg": msg}), 200 if ok else 409
+
+    location = response.headers.get("Location", "")
+    messages = parse_qs(urlsplit(location).query).get("msg", [])
+    msg = messages[0] if messages else f"Action returned HTTP {response.status_code}"
+    failure_words = ("cannot", "failed", "fail ", "insufficient", "not found")
+    ok = response.status_code < 400 and not any(word in msg.lower() for word in failure_words)
+    return jsonify({"ok": ok, "msg": msg}), 200 if ok else 409
 
 @app.route("/action/timein-now")
 def action_timein_now():
@@ -647,7 +777,8 @@ def action_timein_now():
     ti = status.get("timein", {})
     if ti.get("date") == today and ti.get("status") == "success":
         today_fmt = datetime.now().strftime("%d-%b-%Y")
-        return redirect(url_for("dashboard", msg=f"Time-In already posted today {today_fmt} at " + ti.get("action_time", "?")))
+        recorded_time = ti.get("action_time") or ti.get("observed_time") or "?"
+        return redirect(url_for("dashboard", msg=f"Time-In already posted today {today_fmt} at {recorded_time}"))
     # A dangling prior-day Time-Out is no longer a hard block here -
     # timein_bot.py auto-completes it before proceeding with today's Time-In.
     subprocess.Popen([sys.executable, str(BASE_DIR / "timein_bot.py"), "timein", "--now"],
@@ -673,7 +804,8 @@ def action_timeout_now():
         return redirect(url_for("dashboard", msg=f"Cannot Time-Out: you haven't Timed-In today {today_fmt} yet"))
     if to.get("date") == today and to.get("status") == "success":
         today_fmt = datetime.now().strftime("%d-%b-%Y")
-        return redirect(url_for("dashboard", msg=f"Time-Out already posted today {today_fmt} at " + to.get("action_time", "?")))
+        recorded_time = to.get("action_time") or to.get("observed_time") or "?"
+        return redirect(url_for("dashboard", msg=f"Time-Out already posted today {today_fmt} at {recorded_time}"))
     subprocess.Popen([sys.executable, str(BASE_DIR / "timein_bot.py"), "timeout", "--now"],
                      creationflags=subprocess.CREATE_NO_WINDOW)
     from notify import notify
@@ -702,28 +834,25 @@ def action_update_cloud_sync():
         config["cloud_sync"] = {}
     gh_repo = request.form.get("gh_repo", "").strip()
     gh_token = request.form.get("gh_token", "").strip()
+    existing_token = config["cloud_sync"].get("github", {}).get("token", "")
+    saved_token = gh_token or existing_token
     config["cloud_sync"]["github"] = {
         "repo": gh_repo,
-        "token": gh_token,
-        "enabled": bool(gh_repo and gh_token),
+        "token": saved_token,
+        "enabled": bool(gh_repo and saved_token),
     }
     save_json(CONFIG_FILE, config)
     from notify import notify
-    if gh_repo and gh_token:
+    if gh_repo and saved_token:
         notify("Cloud sync configured: GitHub", title="Cloud Sync", tags="cloud")
     return redirect(url_for("dashboard", msg="Cloud sync settings saved"))
 
 @app.route("/action/test-cloud-sync")
 def action_test_cloud_sync():
-    config = load_config()
-    creds = config.get("credentials", {})
-    from cloud_sync import sync_credentials
-    results = sync_credentials(user_id=creds.get("user_id"), password=creds.get("password"))
-    parts = []
-    for svc, r in results.items():
-        status = "OK" if r["ok"] else "FAIL"
-        parts.append(f"{svc}: {status} ({r['message']})")
-    return redirect(url_for("dashboard", msg="Sync test: " + "; ".join(parts)))
+    from cloud_sync import test_github_connection
+    ok, message = test_github_connection()
+    status = "OK" if ok else "FAIL"
+    return redirect(url_for("dashboard", msg=f"Sync test: {status} ({message})"))
 
 def compute_hours_worked(ti, to):
     """Hours between a Time-In and Time-Out clock-time on the same nominal
@@ -807,7 +936,7 @@ def render_workdays(days):
             badge = '<span class="badge ok">Working</span>'
             badge += f' <a class="btn sm danger" style="padding:.2rem .4rem;font-size:.65rem" href="/action/remove-working-weekend/{d["date"]}">Undo</a>'
         elif d["skip"]:
-            badge = f'<span class="badge skip">{d["skip"]}</span>'
+            badge = f'<span class="badge skip">{html.escape(str(d["skip"]))}</span>'
             if d.get("is_weekend"):
                 badge += f' <a class="btn sm outline" style="padding:.2rem .4rem;font-size:.65rem" href="/action/add-working-weekend/{d["date"]}">Work</a>'
         else:
@@ -842,7 +971,7 @@ def render_holidays(holidays):
         actions_html += f'<a class="{toggle_cls}" href="/action/toggle-holiday/{h["date"]}">{toggle_label}</a>'
         actions_html += '</div>'
         rows.append(
-            f'<div class="hol-row"><div class="hol-info"{dim}><strong>{h["label"]}</strong>{moon_icon}<br>'
+            f'<div class="hol-row"><div class="hol-info"{dim}><strong>{html.escape(str(h["label"]))}</strong>{moon_icon}<br>'
             f'<span class="hol-date">{d.strftime("%a %b %d, %Y")}</span> {badge}</div>'
             f'{actions_html}</div>')
     return "\n".join(rows)
@@ -853,16 +982,19 @@ def render_blackouts(dates, ranges):
     rows = []
     for d in dates:
         dt = datetime.strptime(d["date"], "%Y-%m-%d")
-        reason = d.get("reason", "")
+        reason = html.escape(str(d.get("reason", "")))
         days_str = f' ({d["days"]}d)' if d.get("days") and d["days"] != 1 else ""
         cancel_url = f'/action/cancel-leave/{d["date"]}' if d.get("leave_type") else f'/action/cancel-skip/{d["date"]}'
         rows.append(
             f'<div class="bl-row"><div><strong>{dt.strftime("%a %b %d")}</strong> - {reason}{days_str}</div>'
             f'<a class="btn sm danger" href="{cancel_url}">Cancel</a></div>')
     for r in ranges:
+        range_start = html.escape(str(r["start"]), quote=True)
+        range_end = html.escape(str(r["end"]), quote=True)
+        range_reason = html.escape(str(r.get("reason", "")))
         rows.append(
-            f'<div class="bl-row"><div><strong>{r["start"]} to {r["end"]}</strong> - {r.get("reason","")}</div>'
-            f'<a class="btn sm danger" href="/action/cancel-range/{r["start"]}/{r["end"]}">Cancel</a></div>')
+            f'<div class="bl-row"><div><strong>{range_start} to {range_end}</strong> - {range_reason}</div>'
+            f'<a class="btn sm danger" href="/action/cancel-range/{range_start}/{range_end}">Cancel</a></div>')
     return "\n".join(rows)
 
 def render_leave_balance(lb):
@@ -897,7 +1029,7 @@ def render_leave_balance(lb):
 def render_notif_prefs():
     notif_prefs = load_notif_prefs()
     prefs = notif_prefs.get("preferences", {})
-    admin_email = notif_prefs.get("admin_email", "")
+    admin_email = str(notif_prefs.get("admin_email", ""))
     labels = {
         "timein_success": "Time-In Success",
         "timeout_success": "Time-Out Success",
@@ -941,7 +1073,7 @@ def dashboard():
     toast_html = ""
     if msg:
         cls = "toast-error" if is_error else "toast-ok"
-        toast_html = f'<div class="toast {cls}" id="toast">{msg}</div>'
+        toast_html = f'<div class="toast {cls}" id="toast">{html.escape(msg)}</div>'
     ti = status.get("timein", {})
     to = status.get("timeout", {})
     ti_done = ti.get("date") == today and ti.get("status") == "success"
@@ -950,6 +1082,8 @@ def dashboard():
     ti_failed = ti.get("date") == today and ti.get("status") == "failed"
     to_failed = to.get("date") == today and to.get("status") == "failed"
     admin_first = admin_email.split("@")[0].split(".")[0].capitalize() if admin_email else "Admin"
+    admin_email_attr = html.escape(admin_email, quote=True)
+    admin_first_attr = html.escape(admin_first, quote=True)
     email_btn = ""
     if (ti_failed or to_failed) and admin_email:
         fail_mode = "Time-In" if ti_failed else "Time-Out"
@@ -972,8 +1106,8 @@ def dashboard():
             f'</select></div>'
             f'<button class="btn full outline" onclick="composeEmail()" style="margin-top:.5rem">Compose Correction Email</button>'
             f'</div>'
-            f'<input type="hidden" id="corr-email" value="{admin_email}">'
-            f'<input type="hidden" id="corr-name" value="{admin_first}">'
+            f'<input type="hidden" id="corr-email" value="{admin_email_attr}">'
+            f'<input type="hidden" id="corr-name" value="{admin_first_attr}">'
             f'<input type="hidden" id="corr-date" value="{today}">'
             f'</div>')
     lb = config.get("leave_balance", {})
@@ -982,25 +1116,25 @@ def dashboard():
     return DASHBOARD_HTML.format(
         toast_html=toast_html, today=today, now=now,
         ti_class="done" if ti_done else "none",
-        ti_time=ti.get("action_time", "-") if ti_done else "-",
-        ti_meta=today if ti_done else "",
+        ti_time=(ti.get("action_time") or ti.get("observed_time") or "-") if ti_done else "-",
+        ti_meta=(today + (" (pre-existing)" if ti.get("action_origin") == "preexisting" else "")) if ti_done else "",
         to_class="done" if to_done else "none",
-        to_time=to.get("action_time", "-") if to_done else "-",
-        to_meta=today if to_done else ("Pending" if ti_done else ""),
+        to_time=(to.get("action_time") or to.get("observed_time") or "-") if to_done else "-",
+        to_meta=(today + (" (pre-existing)" if to.get("action_origin") == "preexisting" else "")) if to_done else ("Pending" if ti_done else ""),
         ti_btn="disabled" if ti_done else "",
         to_btn="disabled" if to_done else "",
         workdays_html=render_workdays(workdays), holidays_html=render_holidays(upcoming),
         blackout_html=render_blackouts(bl_dates, bl_ranges),
-        user_id=config.get("credentials", {}).get("user_id", "?"),
-        password=config.get("credentials", {}).get("password", "?"),
+        user_id=html.escape(str(config.get("credentials", {}).get("user_id", "?")), quote=True),
+        password="",
         ti_start=config['timein']['window_start'], ti_end=config['timein']['window_end'],
         to_start=config['timeout']['window_start'], to_end=config['timeout']['window_end'],
-        notif_rows=notif_rows, admin_email=admin_email,
+        notif_rows=notif_rows, admin_email=html.escape(admin_email, quote=True),
         email_btn=email_btn, email_action=email_action,
-        portal_user=config.get("portal", {}).get("username", ""),
-        portal_pass=config.get("portal", {}).get("password", ""),
-        gh_repo=config.get("cloud_sync", {}).get("github", {}).get("repo", ""),
-        gh_token=config.get("cloud_sync", {}).get("github", {}).get("token", ""),
+        portal_user=html.escape(str(config.get("portal", {}).get("username", "")), quote=True),
+        portal_pass="",
+        gh_repo=html.escape(str(config.get("cloud_sync", {}).get("github", {}).get("repo", "")), quote=True),
+        gh_token="",
         paused_class="paused" if is_paused else "",
         pause_label="Resume Bot" if is_paused else "Pause Bot",
         pause_icon="&#9654;" if is_paused else "&#9208;",
@@ -1195,7 +1329,7 @@ body{{background:var(--bg);color:var(--text);font-family:-apple-system,system-ui
       <form action="/action/update-credentials" method="POST" class="cred-form">
         <div class="form-row"><label for="user_id">User ID</label><input type="text" id="user_id" name="user_id" value="{user_id}" class="input"></div>
         <div class="form-row"><label for="password">Password</label>
-          <div class="pw-wrap"><input type="password" id="password" name="password" value="{password}" class="input">
+          <div class="pw-wrap"><input type="password" id="password" name="password" value="{password}" class="input" placeholder="Enter a new password">
             <button type="button" class="btn sm outline" onclick="var p=document.getElementById('password');p.type=p.type==='password'?'text':'password';this.textContent=p.type==='password'?'Show':'Hide'">Show</button></div></div>
         <button type="submit" class="btn full" style="margin-top:.5rem">Save Credentials</button></form>
       <p style="font-size:.75rem;color:var(--text2);margin-top:.6rem">These credentials are used by the bot to log in to the Time In / Time Out page.</p></div>
@@ -1203,7 +1337,7 @@ body{{background:var(--bg);color:var(--text);font-family:-apple-system,system-ui
       <form action="/action/update-portal" method="POST" class="cred-form">
         <div class="form-row"><label for="portal_user">Portal Username</label><input type="text" id="portal_user" name="portal_user" value="{portal_user}" class="input" placeholder="aly.jafferani"></div>
         <div class="form-row"><label for="portal_pass">Portal Password</label>
-          <div class="pw-wrap"><input type="password" id="portal_pass" name="portal_pass" value="{portal_pass}" class="input">
+          <div class="pw-wrap"><input type="password" id="portal_pass" name="portal_pass" value="{portal_pass}" class="input" placeholder="Enter a new password">
             <button type="button" class="btn sm outline" onclick="var p=document.getElementById('portal_pass');p.type=p.type==='password'?'text':'password';this.textContent=p.type==='password'?'Show':'Hide'">Show</button></div></div>
         <button type="submit" class="btn full" style="margin-top:.5rem">Save Portal Credentials</button></form>
       <p style="font-size:.75rem;color:var(--text2);margin-top:.6rem">Used to log in to one.aku.edu for remote attendance marking. Username is without @aku.edu.</p></div>
@@ -1247,11 +1381,11 @@ body{{background:var(--bg);color:var(--text);font-family:-apple-system,system-ui
       </form>
       <p style="font-size:.75rem;color:var(--text2);margin-top:.6rem">Set your current remaining leaves. The bot deducts when you mark leave days.</p></div>
     <div class="card"><div class="card-title">Cloud Sync (GitHub)</div>
-      <p style="font-size:.8rem;color:var(--text2);margin-bottom:.5rem">Connect GitHub so password and timing changes sync automatically. Hierarchy: GitHub Actions (self-hosted runner), then Desktop bot.</p>
+      <p style="font-size:.8rem;color:var(--text2);margin-bottom:.5rem">Connect GitHub for non-secret settings, status, and fallback timing. Attendance and portal credentials remain local.</p>
       <form action="/action/update-cloud-sync" method="POST" class="cred-form">
         <div class="form-row"><label for="gh_repo">Repo (owner/name)</label><input type="text" id="gh_repo" name="gh_repo" value="{gh_repo}" class="input" placeholder="username/attendance-bot"></div>
         <div class="form-row"><label for="gh_token">Personal Access Token</label>
-          <div class="pw-wrap"><input type="password" id="gh_token" name="gh_token" value="{gh_token}" class="input" placeholder="ghp_...">
+          <div class="pw-wrap"><input type="password" id="gh_token" name="gh_token" value="{gh_token}" class="input" placeholder="Leave blank to keep the saved token">
             <button type="button" class="btn sm outline" onclick="var p=document.getElementById('gh_token');p.type=p.type==='password'?'text':'password';this.textContent=p.type==='password'?'Show':'Hide'">Show</button></div></div>
         <button type="submit" class="btn full" style="margin-top:.5rem">Save Cloud Sync</button>
         <a class="btn full outline" href="/action/test-cloud-sync" style="margin-top:.3rem;display:block;text-align:center">Test Sync Now</a></form></div>
@@ -1653,5 +1787,7 @@ if __name__ == "__main__":
     host = dash.get("host", "0.0.0.0")
     port = dash.get("port", 5000)
     print(f"Attendance Management dashboard running at http://0.0.0.0:{port}")
-    print(f"Access from phone: http://{__import__('notify').get_local_ip()}:{port}")
+    print(f"LAN access: http://{__import__('notify').get_local_ip()}:{port}")
+    if dash.get("tailscale_ip"):
+        print(f"Tailscale access: http://{dash['tailscale_ip']}:{port}")
     app.run(host=host, port=port, debug=False)

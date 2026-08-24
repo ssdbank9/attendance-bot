@@ -1,10 +1,8 @@
 """Apply new bot login credentials from NEW_USER_ID/NEW_PASSWORD env vars.
 
-Run by attendance.yml (action=update-credentials) on the self-hosted
-runner. The values come from GitHub Actions secrets set by the git
-dashboard (encrypted, masked in logs) - config.json is local-only, so
-this can't be a direct GitHub Contents API write like the synced JSON
-files. Mirrors dashboard.py's /action/update-credentials route.
+Optional local-only helper for applying credentials from environment
+variables. The GitHub workflow deliberately does not invoke this helper or
+transport credentials.
 """
 import json
 import os
@@ -29,13 +27,8 @@ def main():
         json.dump(config, f, indent=2)
 
     from notify import notify
-    notify(f"Credentials updated. User ID: {new_uid}", title="Credentials Changed", tags="key")
-    try:
-        from cloud_sync import sync_credentials
-        sync_credentials(user_id=new_uid, password=new_pw)
-    except Exception:
-        pass
-    print(f"Credentials updated for user_id={new_uid}")
+    notify("Attendance credentials updated locally.", title="Credentials Changed", tags="key")
+    print("Attendance credentials updated locally")
 
 
 if __name__ == "__main__":

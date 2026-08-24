@@ -7,10 +7,6 @@
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <title>Attendance Bot</title>
-<!-- libsodium: used only to encrypt new credential values into GitHub
-     Actions secrets (crypto_box_seal, per GitHub's own documented
-     approach) before they ever leave the browser. -->
-<script src="https://cdn.jsdelivr.net/npm/libsodium-wrappers@0.7.13/dist/browsers/sodium.js"></script>
 <style>
 :root{--bg:#fff;--bg2:#f5f6fa;--bg3:#eef1f6;--text:#1a1a2e;--text2:#666;--primary:#1565c0;--primary-light:#e3f2fd;--green:#27ae60;--orange:#e67e22;--red:#e74c3c;--border:#e0e0e0;--shadow:0 1px 4px rgba(0,0,0,.08);--radius:12px}
 @media(prefers-color-scheme:dark){:root:not([data-theme="light"]){--bg:#0f0f1a;--bg2:#1a1a2e;--bg3:#252540;--text:#e8e8f0;--text2:#999;--primary:#4da6ff;--primary-light:#1a2a40;--border:#333;--shadow:0 1px 4px rgba(0,0,0,.3)}}
@@ -259,18 +255,8 @@ select.input{appearance:none;background-image:url("data:image/svg+xml,%3Csvg xml
       </div>
     </div>
     <div class="card">
-      <div class="card-title">Login Credentials</div>
-      <p style="font-size:.75rem;color:var(--text2);margin-bottom:.5rem">Used by the bot to log in to the Time In / Time Out page. Encrypted into a GitHub Actions secret before sending - never stored in this repo in plaintext.</p>
-      <div class="form-group"><label>User ID</label><input class="input" type="text" id="cred-user-id"></div>
-      <div class="form-group"><label>Password</label><input class="input" type="password" id="cred-password"></div>
-      <button class="btn btn-primary" onclick="saveCredentials()">Save Credentials</button>
-    </div>
-    <div class="card">
-      <div class="card-title">Portal Login (one.aku.edu)</div>
-      <p style="font-size:.75rem;color:var(--text2);margin-bottom:.5rem">Username is without @aku.edu.</p>
-      <div class="form-group"><label>Portal Username</label><input class="input" type="text" id="portal-user" placeholder="aly.jafferani"></div>
-      <div class="form-group"><label>Portal Password</label><input class="input" type="password" id="portal-password"></div>
-      <button class="btn btn-primary" onclick="savePortalCredentials()">Save Portal Credentials</button>
+      <div class="card-title">Credentials Stay Local</div>
+      <p style="font-size:.75rem;color:var(--text2)">Attendance and portal credentials cannot be sent through GitHub. Update them only from the authenticated dashboard on the attendance computer.</p>
     </div>
     <div class="card">
       <div class="card-title">Randomized Time Windows</div>
@@ -415,6 +401,8 @@ const NOTIF_PREF_LABELS = {
 const CACHE_KEY = 'att_cache';
 const today = () => new Date().toISOString().slice(0,10);
 const fmt = v => v===Math.floor(v)?Math.floor(v):v;
+const esc = v => String(v == null ? '' : v).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const isIsoDate = v => typeof v === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(v);
 
 // ===== Init =====
 async function init() {
@@ -510,27 +498,6 @@ async function dispatchWorkflowAction(mode, inputs) {
   return {ok: false, message: e.message || ('HTTP '+r.status)};
 }
 
-// ===== GitHub Actions secrets (for credential updates) =====
-async function setGithubSecret(secretName, secretValue) {
-  await sodium.ready;
-  const keyResp = await fetch('https://api.github.com/repos/'+GH.repo+'/actions/secrets/public-key', {headers: GH.headers()});
-  if (!keyResp.ok) return {ok:false, message:'Could not fetch public key (HTTP '+keyResp.status+')'};
-  const keyData = await keyResp.json();
-  const binKey = sodium.from_base64(keyData.key, sodium.base64_variants.ORIGINAL);
-  const binSecret = sodium.from_string(secretValue);
-  const encBytes = sodium.crypto_box_seal(binSecret, binKey);
-  const encryptedValue = sodium.to_base64(encBytes, sodium.base64_variants.ORIGINAL);
-
-  const r = await fetch('https://api.github.com/repos/'+GH.repo+'/actions/secrets/'+secretName, {
-    method: 'PUT',
-    headers: GH.headers(),
-    body: JSON.stringify({encrypted_value: encryptedValue, key_id: keyData.key_id}),
-  });
-  if (r.status === 201 || r.status === 204) return {ok:true};
-  const e = await r.json().catch(function(){ return {}; });
-  return {ok:false, message: e.message || ('HTTP '+r.status)};
-}
-
 async function triggerAction(mode) {
   const label = mode==='timein' ? 'Time-In' : 'Time-Out';
   showToast('Dispatching '+label+'...', 'ok');
@@ -544,36 +511,6 @@ async function triggerAction(mode) {
   } catch (e) {
     showToast('Trigger failed: '+e.message, 'error');
   }
-}
-
-async function saveCredentials() {
-  const userId = document.getElementById('cred-user-id').value.trim();
-  const password = document.getElementById('cred-password').value;
-  if (!userId || !password) { showToast('Fill both fields','error'); return; }
-  showToast('Encrypting and saving...','ok');
-  try {
-    const s1 = await setGithubSecret('NEW_USER_ID', userId);
-    const s2 = await setGithubSecret('NEW_PASSWORD', password);
-    if (!s1.ok || !s2.ok) { showToast('Failed to set secret: '+(s1.message||s2.message),'error'); return; }
-    const result = await dispatchWorkflowAction('update-credentials');
-    if (result.ok) { showToast('Credentials update triggered - applying on desktop now','ok'); document.getElementById('cred-password').value=''; }
-    else showToast('Trigger failed: '+result.message,'error');
-  } catch(e) { showToast('Failed: '+e.message,'error'); }
-}
-
-async function savePortalCredentials() {
-  const user = document.getElementById('portal-user').value.trim();
-  const password = document.getElementById('portal-password').value;
-  if (!user || !password) { showToast('Fill both fields','error'); return; }
-  showToast('Encrypting and saving...','ok');
-  try {
-    const s1 = await setGithubSecret('NEW_PORTAL_USER', user);
-    const s2 = await setGithubSecret('NEW_PORTAL_PASSWORD', password);
-    if (!s1.ok || !s2.ok) { showToast('Failed to set secret: '+(s1.message||s2.message),'error'); return; }
-    const result = await dispatchWorkflowAction('update-portal');
-    if (result.ok) { showToast('Portal credentials update triggered','ok'); document.getElementById('portal-password').value=''; }
-    else showToast('Trigger failed: '+result.message,'error');
-  } catch(e) { showToast('Failed: '+e.message,'error'); }
 }
 
 async function saveTimeWindows() {
@@ -638,7 +575,7 @@ function renderAll() {
 
 function renderWorkingWeekends() {
   const el = document.getElementById('working-weekends-content');
-  const ww = ((S.blackout||{}).working_weekends||[]).filter(function(d){return d>=today()}).sort();
+  const ww = ((S.blackout||{}).working_weekends||[]).filter(function(d){return isIsoDate(d)&&d>=today()}).sort();
   if (!ww.length) { el.innerHTML='<div class="empty">None marked</div>'; return; }
   let h = '';
   ww.forEach(function(d){
@@ -660,8 +597,8 @@ function renderStatus() {
   const tiDate = ti.date||st.date||'--';
   const toTime = to.action_time||'Pending';
   const toDate = to.date||'';
-  el.innerHTML = '<div class="status-item"><div class="status-label">Time-In</div><div class="status-value">'+tiTime+'</div><div class="status-sub">'+tiDate+'</div></div>'
-    +'<div class="status-item"><div class="status-label">Time-Out</div><div class="status-value">'+toTime+'</div><div class="status-sub">'+toDate+'</div></div>';
+  el.innerHTML = '<div class="status-item"><div class="status-label">Time-In</div><div class="status-value">'+esc(tiTime)+'</div><div class="status-sub">'+esc(tiDate)+'</div></div>'
+    +'<div class="status-item"><div class="status-label">Time-Out</div><div class="status-value">'+esc(toTime)+'</div><div class="status-sub">'+esc(toDate)+'</div></div>';
 
   const paused = (S.botConfig||{}).paused;
   const pauseBtn = document.getElementById('pause-btn');
@@ -732,7 +669,7 @@ function renderForecast() {
 
 function renderSkips() {
   const el = document.getElementById('skips-content');
-  const dates = ((S.blackout||{}).dates||[]).filter(function(d){return d.date>=today()});
+  const dates = ((S.blackout||{}).dates||[]).filter(function(d){return isIsoDate(d.date)&&d.date>=today()});
   if (!dates.length) { el.innerHTML='<div class="empty">No active leaves or skips</div>'; return; }
   let h = '';
   dates.sort(function(a,b){return a.date.localeCompare(b.date)});
@@ -741,13 +678,13 @@ function renderSkips() {
     const dayStr = ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'][dt.getDay()];
     const monthStr = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'][dt.getMonth()];
     const daysLabel = d.days===0.5?' (\u00bd day)':'';
-    h += '<div class="skip-item"><div><div class="skip-info">'+d.reason+daysLabel+'</div><div class="skip-date">'+dayStr+' '+monthStr+' '+dt.getDate()+'</div></div>'
+    h += '<div class="skip-item"><div><div class="skip-info">'+esc(d.reason)+daysLabel+'</div><div class="skip-date">'+dayStr+' '+monthStr+' '+dt.getDate()+'</div></div>'
       +'<button class="btn btn-sm btn-danger" onclick="cancelSkip(\''+d.date+'\')">Cancel</button></div>';
   });
-  const ranges = ((S.blackout||{}).ranges||[]).filter(function(r){return r.end>=today()});
+  const ranges = ((S.blackout||{}).ranges||[]).filter(function(r){return isIsoDate(r.start)&&isIsoDate(r.end)&&r.end>=today()});
   ranges.sort(function(a,b){return a.start.localeCompare(b.start)});
   ranges.forEach(function(r){
-    h += '<div class="skip-item"><div><div class="skip-info">'+r.reason+'</div><div class="skip-date">'+r.start+' to '+r.end+'</div></div>'
+    h += '<div class="skip-item"><div><div class="skip-info">'+esc(r.reason)+'</div><div class="skip-date">'+esc(r.start)+' to '+esc(r.end)+'</div></div>'
       +'<button class="btn btn-sm btn-danger" onclick="cancelRange(\''+r.start+'\',\''+r.end+'\')">Cancel</button></div>';
   });
   if (!dates.length && !ranges.length) { el.innerHTML='<div class="empty">No active leaves or skips</div>'; }
@@ -757,7 +694,7 @@ function renderSkips() {
 function renderHolidays() {
   const el = document.getElementById('holidays-content');
   const td = today();
-  const hols = ((S.holidays||{}).holidays||[]).filter(function(h){return h.date>=td}).sort(function(a,b){return a.date.localeCompare(b.date)}).slice(0,10);
+  const hols = ((S.holidays||{}).holidays||[]).filter(function(h){return isIsoDate(h.date)&&h.date>=td}).sort(function(a,b){return a.date.localeCompare(b.date)}).slice(0,10);
   if (!hols.length) { el.innerHTML='<div class="empty">No upcoming holidays</div>'; return; }
   let h = '';
   hols.forEach(function(ho){
@@ -767,7 +704,7 @@ function renderHolidays() {
     const moon = ho.moon_dependent?' \u263D':'';
     const disabled = ho.disabled?' <span style="color:var(--red)">(disabled)</span>':'';
     const needsConfirm = ho.moon_dependent && !ho.confirmed;
-    h += '<div class="hol-item"><strong>'+ho.label+'</strong>'+moon+disabled
+    h += '<div class="hol-item"><strong>'+esc(ho.label)+'</strong>'+moon+disabled
       +'<div class="hol-date">'+dayStr+' '+monthStr+' '+dt.getDate()+', '+dt.getFullYear()+'</div>'
       +'<div style="display:flex;gap:.4rem;margin-top:.4rem;flex-wrap:wrap">'
       +(needsConfirm?'<button class="btn btn-sm" onclick="confirmHoliday(\''+ho.date+'\')">Confirm</button>':'')
@@ -783,7 +720,7 @@ function renderAnalytics() {
   const el1 = document.getElementById('analytics-summary');
   const el2 = document.getElementById('analytics-history');
   const lb = S.balance||{};
-  const leaves = ((S.blackout||{}).dates||[]).filter(function(d){return d.leave_type});
+  const leaves = ((S.blackout||{}).dates||[]).filter(function(d){return d.leave_type&&isIsoDate(d.date)});
   const types = [['casual','Casual'],['sick','Sick'],['earned','Earned']];
   let h = '';
   types.forEach(function(t){
@@ -797,7 +734,7 @@ function renderAnalytics() {
   leaves.sort(function(a,b){return b.date.localeCompare(a.date)});
   leaves.forEach(function(l){
     const daysLbl = l.days===0.5?' (\u00bd day)':'';
-    h += '<div class="history-item">'+l.date+' \u2014 '+l.reason+daysLbl+'</div>';
+    h += '<div class="history-item">'+esc(l.date)+' \u2014 '+esc(l.reason)+daysLbl+'</div>';
   });
   el2.innerHTML = h;
 }
@@ -857,7 +794,7 @@ function renderAttendanceReport() {
   let h = '<div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse;font-size:.8rem">'
     +'<tr><th style="text-align:left;padding:.3rem">Date</th><th style="text-align:left;padding:.3rem">Time-In</th><th style="text-align:left;padding:.3rem">Time-Out</th><th style="text-align:right;padding:.3rem">Hours</th></tr>';
   rows.forEach(function(r){
-    h += '<tr><td style="padding:.3rem">'+r.day+' '+r.date+'</td><td style="padding:.3rem">'+r.timein+'</td><td style="padding:.3rem">'+r.timeout+'</td><td style="padding:.3rem;text-align:right">'+(r.hours!=null?r.hours.toFixed(2):'N/A')+'</td></tr>';
+    h += '<tr><td style="padding:.3rem">'+esc(r.day)+' '+esc(r.date)+'</td><td style="padding:.3rem">'+esc(r.timein)+'</td><td style="padding:.3rem">'+esc(r.timeout)+'</td><td style="padding:.3rem;text-align:right">'+(r.hours!=null?r.hours.toFixed(2):'N/A')+'</td></tr>';
   });
   h += '</table></div>';
   el.innerHTML = h;
