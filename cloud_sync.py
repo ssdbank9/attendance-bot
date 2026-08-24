@@ -79,8 +79,17 @@ def sync_github_credentials(user_id=None, password=None):
     return ok_all, "; ".join(results)
 
 
-def sync_github_workflow_timing(timein_start, timeout_start):
-    """Update the cron schedule in the GitHub Actions workflow file."""
+def sync_github_workflow_timing(timein_end, timeout_end):
+    """Update the GitHub Actions cron schedule to fire right at the local
+    bot's window_end for each mode - the workflow's own --fallback logic
+    (timein_bot.py's pick_fallback_target_time) then picks a random
+    0-10min buffer from there, so this only needs to set the trigger
+    instant, not the randomization itself.
+
+    Matches the two `- cron:` lines by POSITION (1st entry = Time-In,
+    2nd = Time-Out) rather than by nearby comment text - comment wording
+    has changed twice already as this workflow evolved, so text-matching
+    was fragile; position within the schedule list is stable."""
     sync = get_sync_config().get("github", {})
     repo = sync.get("repo", "").strip()
     token = sync.get("token", "").strip()
@@ -90,10 +99,10 @@ def sync_github_workflow_timing(timein_start, timeout_start):
     import requests
     headers = _gh_headers(token)
 
-    ti_h, ti_m = timein_start.split(":")
-    to_h, to_m = timeout_start.split(":")
-    ti_utc_h = (int(ti_h) - 5) % 24
-    to_utc_h = (int(to_h) - 5) % 24
+    ti_h, ti_m = timein_end.split(":")
+    to_h, to_m = timeout_end.split(":")
+    ti_utc_h, ti_utc_m = (int(ti_h) - 5) % 24, int(ti_m)
+    to_utc_h, to_utc_m = (int(to_h) - 5) % 24, int(to_m)
 
     file_path = ".github/workflows/attendance.yml"
     url = f"https://api.github.com/repos/{repo}/contents/{file_path}"
@@ -105,17 +114,20 @@ def sync_github_workflow_timing(timein_start, timeout_start):
     content = base64.b64decode(file_data["content"]).decode("utf-8")
     sha = file_data["sha"]
 
-    import re
     lines = content.split("\n")
     new_lines = []
-    for i, line in enumerate(lines):
-        if "cron:" in line and i > 0:
-            prev = lines[i-1] if i > 0 else ""
-            if "Time-In" in prev or "8:45" in prev or "3:45" in prev:
-                line = f"    - cron: '{int(ti_m)} {ti_utc_h} * * 1-5'"
-            elif "Time-Out" in prev or "8:00 PM" in prev or "3:00 PM" in prev or "15:" in prev:
-                line = f"    - cron: '{int(to_m)} {to_utc_h} * * 1-5'"
+    cron_index = 0
+    for line in lines:
+        if line.strip().startswith("- cron:") and cron_index < 2:
+            if cron_index == 0:
+                line = f"    - cron: '{ti_utc_m} {ti_utc_h} * * 1-5'"
+            else:
+                line = f"    - cron: '{to_utc_m} {to_utc_h} * * 1-5'"
+            cron_index += 1
         new_lines.append(line)
+
+    if cron_index != 2:
+        return False, f"Expected 2 cron lines in the schedule, found {cron_index}"
 
     new_content = "\n".join(new_lines)
     if new_content == content:
@@ -123,13 +135,13 @@ def sync_github_workflow_timing(timein_start, timeout_start):
 
     encoded = base64.b64encode(new_content.encode("utf-8")).decode("utf-8")
     payload = {
-        "message": f"Update attendance timing: TI={timein_start} TO={timeout_start} PKT",
+        "message": f"Update fallback cron to window_end: TI={timein_end} TO={timeout_end} PKT",
         "content": encoded,
         "sha": sha,
     }
     resp = requests.put(url, json=payload, headers=headers, timeout=15)
     if resp.status_code in (200, 201):
-        return True, f"Cron updated: TI={ti_utc_h}:{ti_m} UTC, TO={to_utc_h}:{to_m} UTC"
+        return True, f"Cron updated: TI={ti_utc_h:02d}:{ti_utc_m:02d} UTC, TO={to_utc_h:02d}:{to_utc_m:02d} UTC"
     return False, f"Update failed: HTTP {resp.status_code}"
 
 
@@ -318,8 +330,9 @@ def sync_credentials(user_id=None, password=None):
     return results
 
 
-def sync_time_windows(timein_start, timeout_start):
-    """Sync time windows to GitHub Actions."""
-    gh_ok, gh_msg = sync_github_workflow_timing(timein_start, timeout_start)
+def sync_time_windows(timein_end, timeout_end):
+    """Sync time windows to GitHub Actions - updates the fallback cron
+    schedule to fire right at window_end for each mode."""
+    gh_ok, gh_msg = sync_github_workflow_timing(timein_end, timeout_end)
     log.info("Cloud sync timing: GitHub=%s", gh_msg)
     return {"github": {"ok": gh_ok, "message": gh_msg}}

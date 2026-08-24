@@ -49,7 +49,7 @@ def main():
            title="Windows Updated", tags="clock3")
     try:
         from cloud_sync import sync_time_windows
-        sync_time_windows(ti_start, to_start)
+        sync_time_windows(ti_end, to_end)
     except Exception:
         pass
     print(f"Windows updated: TI {ti_start}-{ti_end}, TO {to_start}-{to_end}")

@@ -332,7 +332,7 @@ def action_update_windows():
     notify(f"Time windows updated. In: {ti_start}-{ti_end}, Out: {to_start}-{to_end}", title="Windows Updated", tags="clock3")
     try:
         from cloud_sync import sync_time_windows
-        sync_time_windows(ti_start, to_start)
+        sync_time_windows(ti_end, to_end)
     except Exception:
         pass
     return redirect(url_for("dashboard", msg="Time windows saved + synced to cloud"))
