@@ -1,12 +1,13 @@
 """
-Dashboard watchdog. Relaunches dashboard.py if it isn't listening.
+Dashboard watchdog. Relaunches dashboard.py if it isn't serving requests.
 
-Runs from Task Scheduler shortly before the times the dashboard is actually
-needed (ahead of the time-in and time-out windows) rather than polling all day.
-Does nothing on weekends, holidays, or blackout/leave days.
+Runs from Task Scheduler every few minutes, all day, every day. The dashboard
+is a thing the user opens from their phone at arbitrary times - including
+weekends and leave days, when checking or booking leave is exactly what they
+want to do - so availability is not gated on the attendance calendar.
 
-  python dashboard_watchdog.py          -- check, relaunch if needed
-  python dashboard_watchdog.py --force  -- ignore the calendar checks
+  python dashboard_watchdog.py           -- check, relaunch if not healthy
+  python dashboard_watchdog.py --status  -- report health, never relaunch
 """
 
 import json
@@ -14,6 +15,8 @@ import logging
 import socket
 import subprocess
 import sys
+import urllib.error
+import urllib.request
 from datetime import datetime
 from pathlib import Path
 
@@ -21,8 +24,6 @@ BASE_DIR = Path(__file__).parent
 LOG_DIR = BASE_DIR / "timein_logs"
 LOG_DIR.mkdir(exist_ok=True)
 CONFIG_FILE = BASE_DIR / "config.json"
-HOLIDAYS_FILE = BASE_DIR / "holidays.json"
-BLACKOUT_FILE = BASE_DIR / "blackout.json"
 
 logging.basicConfig(
     level=logging.INFO,
@@ -42,31 +43,58 @@ def load_json(path):
     return {}
 
 
-def skip_reason(date_str, weekday):
-    blackout = load_json(BLACKOUT_FILE)
-    if weekday >= 5 and date_str not in blackout.get("working_weekends", []):
-        return "weekend"
-    for h in load_json(HOLIDAYS_FILE).get("holidays", []):
-        if h["date"] == date_str and not h.get("disabled", False):
-            return f"holiday: {h.get('label', 'Public Holiday')}"
-    for d in blackout.get("dates", []):
-        if d["date"] == date_str:
-            return f"blackout: {d.get('reason', 'Blackout')}"
-    for r in blackout.get("ranges", []):
-        if r["start"] <= date_str <= r["end"]:
-            return f"blackout: {r.get('reason', 'Blackout range')}"
-    return None
+def health(port):
+    """
+    True only if the dashboard actually answers HTTP.
 
-
-def is_listening(port):
+    An open socket is not enough: a wedged process keeps the port bound while
+    serving nothing, which looks identical to 'down' from the phone. /login is
+    the one route that answers without a session, so it is the health probe.
+    """
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
         s.settimeout(2)
-        return s.connect_ex(("127.0.0.1", port)) == 0
+        if s.connect_ex(("127.0.0.1", port)) != 0:
+            return False, "port not listening"
+    try:
+        with urllib.request.urlopen(
+            f"http://127.0.0.1:{port}/login", timeout=8
+        ) as resp:
+            if resp.status == 200:
+                return True, "healthy"
+            return False, f"/login returned HTTP {resp.status}"
+    except urllib.error.HTTPError as e:
+        # Answering at all means the app is alive and routing.
+        return True, f"healthy (/login returned HTTP {e.code})"
+    except Exception as e:
+        return False, f"port open but not serving ({type(e).__name__})"
 
 
 def interpreter():
     venv = BASE_DIR / ".venv-dashboard" / "Scripts" / "python.exe"
     return str(venv) if venv.exists() else sys.executable
+
+
+def kill_wedged(port):
+    """Clear a process still holding the port, or the relaunch cannot bind."""
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+        s.settimeout(2)
+        if s.connect_ex(("127.0.0.1", port)) != 0:
+            return
+    try:
+        out = subprocess.run(
+            ["netstat", "-ano"], capture_output=True, text=True, timeout=20
+        ).stdout
+    except Exception as e:
+        log.warning("Could not enumerate sockets to free port %s: %s", port, e)
+        return
+    for line in out.splitlines():
+        parts = line.split()
+        if len(parts) >= 5 and parts[0] == "TCP" and parts[1].endswith(f":{port}") \
+                and parts[3] == "LISTENING":
+            pid = parts[4]
+            log.warning("Killing wedged process %s holding port %s", pid, port)
+            subprocess.run(["taskkill", "/F", "/PID", pid],
+                           capture_output=True, timeout=20)
 
 
 def launch(port):
@@ -85,23 +113,23 @@ def launch(port):
 
 
 def main():
-    force = "--force" in sys.argv
-    now = datetime.now()
     port = load_json(CONFIG_FILE).get("dashboard", {}).get("port", 5000)
+    ok, detail = health(port)
 
-    if not force:
-        reason = skip_reason(now.strftime("%Y-%m-%d"), now.weekday())
-        if reason:
-            log.info("Not needed today (%s) - skipping", reason)
-            return
+    if "--status" in sys.argv:
+        print(f"port {port}: {detail}")
+        return 0 if ok else 1
 
-    if is_listening(port):
-        log.info("Dashboard already listening on port %s - nothing to do", port)
-        return
+    if ok:
+        # Quiet on the happy path - this runs every few minutes.
+        log.debug("Dashboard %s on port %s", detail, port)
+        return 0
 
-    log.warning("Dashboard not responding on port %s - relaunching", port)
+    log.warning("Dashboard unhealthy on port %s (%s) - relaunching", port, detail)
+    kill_wedged(port)
     launch(port)
+    return 0
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())
