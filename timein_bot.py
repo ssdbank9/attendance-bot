@@ -89,6 +89,33 @@ def write_status(mode, status, message, action_time=None, date_str=None):
     except Exception:
         pass
 
+    if status == "success" and action_time:
+        check_time_diversity(mode, day, action_time)
+
+
+def check_time_diversity(mode, day, action_time):
+    """Alert if this marked time is identical to any of the last 14 days'
+    marked time for the same mode - a sign randomization was bypassed,
+    e.g. by another automation (a leftover Google Apps Script trigger,
+    etc.) firing at a fixed clock time instead of our own bot."""
+    try:
+        recent = db.get_recent_action_times(mode, day, limit=14)
+    except Exception:
+        return
+    dup_date = next((d for d, t in recent if t == action_time), None)
+    if not dup_date:
+        return
+    label = LABELS[mode]
+    log.warning("Anomaly: %s marked at %s is identical to %s - randomization may have been bypassed", label, action_time, dup_date)
+    try:
+        notify(
+            f"{label} marked at {action_time} - identical to {dup_date}. "
+            f"Randomization may not be working (another automation could be firing at a fixed time).",
+            title="Time Anomaly Detected", priority="high", tags="warning",
+        )
+    except Exception:
+        pass
+
 
 def is_holiday(today_str):
     if not HOLIDAYS_FILE.exists():

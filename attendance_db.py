@@ -90,6 +90,31 @@ def get_latest(mode, date_str=None):
         conn.close()
 
 
+def get_recent_action_times(mode, before_date, limit=14):
+    """Latest successful action_time per distinct date for `mode`, strictly
+    before `before_date`, most recent first. Used to detect a marked time
+    that's suspiciously identical to a prior day's - a sign randomization
+    was bypassed (e.g. another automation firing at a fixed clock time)."""
+    init_db()
+    conn = get_connection()
+    try:
+        rows = conn.execute(
+            """
+            SELECT date, action_time FROM (
+                SELECT date, action_time,
+                       ROW_NUMBER() OVER (PARTITION BY date ORDER BY id DESC) as rn
+                FROM events
+                WHERE mode=? AND status='success' AND action_time IS NOT NULL AND date < ?
+            ) WHERE rn = 1
+            ORDER BY date DESC LIMIT ?
+            """,
+            (mode, before_date, limit),
+        ).fetchall()
+        return [(r["date"], r["action_time"]) for r in rows]
+    finally:
+        conn.close()
+
+
 def get_history_range(start_date, end_date):
     """Successful timein/timeout action_times per date within [start, end],
     in the same shape timein_history.json used: {date: {timein: hh:mm:ss,
