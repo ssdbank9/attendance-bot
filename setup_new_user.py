@@ -47,6 +47,11 @@ def setup_config():
     user_id = get_input("  Employee/User ID")
     password = get_input("  Password")
 
+    print("\n--- Portal Login (one.aku.edu) ---")
+    print("  Drives the saved portal page for the Selenium fallback.")
+    portal_user = get_input("  Portal username (e.g. firstname.lastname)")
+    portal_pass = get_input("  Portal password")
+
     print("\n--- Time Windows (press Enter for defaults) ---")
     ti_start = get_input("  Time-In window start (HH:MM)", "08:45")
     ti_end = get_input("  Time-In window end (HH:MM)", "09:05")
@@ -84,6 +89,13 @@ def setup_config():
             "port": 5000,
             "host": "0.0.0.0",
         },
+        "portal": {
+            "enabled": True,
+            "url": "https://one.aku.edu/Pages/homepk.aspx",
+            "username": portal_user,
+            "password": portal_pass,
+        },
+        "paused": False,
     }
 
     with open(config_path, "w", encoding="utf-8") as f:
@@ -145,85 +157,108 @@ def populate_holidays():
         print(f"  Run manually: python manage_holidays.py populate {year}")
 
 
+def quiet_interpreter():
+    """pythonw.exe beside the running interpreter, or None if absent.
+
+    Scheduled tasks must not run python.exe. It is a console binary, so Windows
+    draws a black console window every time a task fires - several times a day,
+    including mid-presentation. pythonw.exe has no console to show.
+    """
+    quiet = Path(sys.executable).with_name("pythonw.exe")
+    return str(quiet) if quiet.exists() else None
+
+
+def _task_ps(name, exe, bot_dir, script, args, trigger, limit_min,
+             wake=False, extra=""):
+    """One Register-ScheduledTask block. Hidden + pythonw is what keeps the bot
+    off screen; the battery and StartWhenAvailable flags stop a laptop that was
+    asleep or unplugged from silently skipping a day."""
+    wake_flag = " -WakeToRun" if wake else ""
+    return f"""
+$a = New-ScheduledTaskAction -Execute '{exe}' -Argument '"{bot_dir}\\{script}"{args}' -WorkingDirectory '{bot_dir}'
+{trigger}
+$s = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -StartWhenAvailable{wake_flag} -ExecutionTimeLimit (New-TimeSpan -Minutes {limit_min}) -MultipleInstances IgnoreNew
+$s.Hidden = $true
+{extra}Register-ScheduledTask -TaskName '{name}' -Action $a -Trigger $t -Settings $s -Force | Out-Null
+Write-Output '  created {name}'"""
+
+
 def create_scheduled_tasks():
     print("\n--- Setting Up Scheduled Tasks ---")
-    python_exe = sys.executable
     bot_dir = str(BASE_DIR)
-
-    tasks = [
-        {
-            "name": "TimeInBot",
-            "time": "08:45",
-            "args": f'"{python_exe}" "{bot_dir}\\timein_bot.py" timein',
-            "desc": "Daily time-in at 8:45 AM",
-        },
-        {
-            "name": "TimeInBot_TimeOut",
-            "time": "20:00",
-            "args": f'"{python_exe}" "{bot_dir}\\timein_bot.py" timeout',
-            "desc": "Daily time-out at 8:00 PM",
-        },
-        {
-            "name": "TimeInBot_HolidayReminder",
-            "time": "19:00",
-            "args": f'"{python_exe}" "{bot_dir}\\holiday_reminder.py" holidays',
-            "desc": "Holiday check at 7:00 PM",
-        },
-        {
-            "name": "TimeInBot_TomorrowPlan",
-            "time": "22:00",
-            "args": f'"{python_exe}" "{bot_dir}\\holiday_reminder.py" tomorrow',
-            "desc": "Tomorrow plan at 10:00 PM",
-        },
-    ]
-
-    for task in tasks:
-        print(f"\n  Creating: {task['name']} ({task['desc']})")
-        cmd = (
-            f'schtasks /Create /TN "{task["name"]}" '
-            f'/TR "{task["args"]}" '
-            f'/SC DAILY /ST {task["time"]} '
-            f'/F /RL HIGHEST'
-        )
-        result = subprocess.run(cmd, shell=True, capture_output=True, text=True)
-        if result.returncode == 0:
-            print(f"    OK")
-        else:
-            print(f"    Failed: {result.stderr.strip()}")
-            print(f"    Run manually as admin if needed.")
-
-    print(f"\n  Creating: TimeInBot_Dashboard (at logon)")
-    launcher = BASE_DIR / "start_dashboard.ps1"
-    dash_action = (
-        "powershell.exe -NoProfile -NonInteractive -WindowStyle Hidden "
-        f'-ExecutionPolicy Bypass -File "{launcher}"'
-    )
-    result = subprocess.run(
-        [
-            "schtasks", "/Create",
-            "/TN", "TimeInBot_Dashboard",
-            "/TR", dash_action,
-            "/SC", "ONLOGON",
-            "/F",
-            "/RL", "LIMITED",
-        ],
-        capture_output=True,
-        text=True,
-    )
-    if result.returncode == 0:
-        print(f"    OK")
+    exe = quiet_interpreter()
+    if not exe:
+        exe = sys.executable
+        print("  [!] pythonw.exe not found beside this interpreter.")
+        print("      Falling back to python.exe - tasks WILL flash a console window.")
     else:
-        print(f"    Failed (may need admin): {result.stderr.strip()}")
+        print(f"  Using {exe} (no console window)")
+
+    blocks = ["$ErrorActionPreference = 'Stop'"]
+
+    # WakeToRun only on the attendance pair: they hand off to a one-shot task at
+    # a randomized instant and the host has to be awake for it. The reminders
+    # can wait for the next time the machine is up.
+    for name, at, script, args, wake in (
+        ("TimeInBot", "08:45", "timein_bot.py", " timein", True),
+        ("TimeInBot_TimeOut", "20:00", "timein_bot.py", " timeout", True),
+        ("TimeInBot_HolidayReminder", "19:00", "holiday_reminder.py", " holidays", False),
+        ("TimeInBot_TomorrowPlan", "22:00", "holiday_reminder.py", " tomorrow", False),
+    ):
+        blocks.append(_task_ps(
+            name, exe, bot_dir, script, args,
+            f"$t = New-ScheduledTaskTrigger -Daily -At '{at}'",
+            25, wake=wake,
+        ))
+
+    # The watchdog owns the dashboard. It is the single launch path: it restarts
+    # the dashboard whenever it stops serving, and the at-logon task points at
+    # the watchdog rather than dashboard.py so two paths cannot disagree about
+    # how the dashboard is started.
+    repeat = (
+        "$t = New-ScheduledTaskTrigger -Daily -At '00:05'\n"
+        "$t.Repetition = (New-ScheduledTaskTrigger -Once -At '00:05' "
+        "-RepetitionInterval (New-TimeSpan -Minutes 5) "
+        "-RepetitionDuration (New-TimeSpan -Days 1)).Repetition\n"
+        "$logon = New-ScheduledTaskTrigger -AtLogOn"
+    )
+    blocks.append(_task_ps(
+        "TimeInBot_DashboardWatchdog", exe, bot_dir, "dashboard_watchdog.py", "",
+        repeat, 10, extra="$t = @($t, $logon)\n",
+    ))
+    blocks.append(_task_ps(
+        "TimeInBot_Dashboard", exe, bot_dir, "dashboard_watchdog.py", "",
+        "$t = New-ScheduledTaskTrigger -AtLogOn", 10,
+    ))
+
+    script_text = "\n".join(blocks)
+    if "--dry-run" in sys.argv:
+        print("\n  DRY RUN - PowerShell that would run:\n")
+        print(script_text)
+        return script_text
+
+    result = subprocess.run(
+        ["powershell", "-NoProfile", "-NonInteractive", "-Command", script_text],
+        capture_output=True, text=True, creationflags=0x08000000,
+    )
+    for line in (result.stdout or "").splitlines():
+        print(line)
+    if result.returncode != 0:
+        print("  [!] Task creation failed:")
+        print("     ", (result.stderr or "").strip()[:400])
+        print("      Re-run this script from an Administrator PowerShell.")
+    return script_text
 
 
 def start_dashboard():
     print("\n--- Starting Dashboard ---")
-    python_exe = sys.executable
+    # Through the watchdog, so the very first launch takes the same path every
+    # later restart will, instead of a one-off that behaves differently.
     subprocess.Popen(
-        [python_exe, str(BASE_DIR / "dashboard.py")],
+        [sys.executable, str(BASE_DIR / "dashboard_watchdog.py")],
         creationflags=0x08000000,
     )
-    print("  Dashboard started on http://localhost:5000")
+    print("  Dashboard starting on http://localhost:5000")
 
 
 def print_ntfy_instructions(config):
@@ -248,11 +283,30 @@ def print_ntfy_instructions(config):
      Install Tailscale on PC + phone
      Then run: python setup_new_user.py --set-tailscale <IP>
 
-  4. TEST IT
-     python timein_bot.py timein --now   (test time-in)
-     python timein_bot.py timeout --now  (test time-out)
+  4. CHECK IT IS SILENT AND REACHABLE
+     powershell -ExecutionPolicy Bypass -File check_quiet.ps1
+     Expect "RESULT: PASS". This confirms no task draws a console window
+     and the dashboard is actually serving.
 
-  Your ntfy topic (keep private): {topic}
+  5. TEST IT  (careful - these mark REAL attendance immediately)
+     python timein_bot.py timein --now
+     python timein_bot.py timeout --now
+
+  REQUIREMENTS
+     * You must be on the AKU network. portalservice.aku.edu is a private
+       address; there is no path that works off-network.
+     * This PC must be awake around your Time-In window. The bot registers a
+       wake-capable one-shot task for its randomized time, so sleep is fine,
+       but the machine cannot be shut down.
+
+  NOT SET UP (optional, needs your own GitHub repo)
+     cloud_sync + the 09:20 deadman alert are not configured. Without them
+     everything still works; you just get no warning on a morning this PC
+     never came on. To enable: add a cloud_sync.github block to config.json
+     and set the NTFY_TOPIC repository secret.
+
+  Your ntfy topic (keep private - anyone with it can read and send
+  your notifications): {topic}
 """)
 
 

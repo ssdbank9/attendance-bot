@@ -91,7 +91,18 @@ def interpreter():
     nothing.
     """
     venv = BASE_DIR / ".venv-dashboard" / "Scripts" / "python.exe"
-    return str(venv) if venv.exists() else sys.executable
+    if venv.exists():
+        return str(venv)
+    # No venv (a fresh install): fall back to the console interpreter, NOT to
+    # whatever launched us. Under the scheduled task that is pythonw.exe, and
+    # serving from pythonw is what the firewall note above warns about.
+    # CREATE_NO_WINDOW keeps python.exe windowless regardless.
+    exe = Path(sys.executable)
+    if exe.name.lower() == "pythonw.exe":
+        console = exe.with_name("python.exe")
+        if console.exists():
+            return str(console)
+    return sys.executable
 
 
 def kill_wedged(port):
