@@ -12,7 +12,7 @@ Usage:
 import json
 import sys
 import tkinter as tk
-from notify import notify_tomorrow, notify_tomorrow_skipped, notify_tomorrow_holiday, notify_holiday_reminder, schedule_deadman_switch
+from notify import notify_tomorrow, notify_tomorrow_skipped, notify_tomorrow_holiday, notify_holiday_reminder
 from tkinter import messagebox
 from datetime import datetime, timedelta
 from pk_time import now as pk_now
@@ -153,7 +153,11 @@ def send_tomorrow_notification():
         return
 
     notify_tomorrow(day_name, tomorrow_str)
-    schedule_deadman_switch(tomorrow_str, day_name)
+    # No dead man's switch queued here any more. It used to be published to
+    # ntfy with a Delay header the night before, so it was delivered at 09:05
+    # regardless of what happened - a false alarm on every day the bot worked.
+    # cloud_deadman_check.py now runs at 09:20 PKT from a GitHub-hosted runner
+    # and only alerts when the synced status shows Time-In really is missing.
 
 
 def run_holiday_check():

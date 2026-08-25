@@ -269,34 +269,3 @@ def notify_holiday_reminder(holiday_label, holiday_date, days_until=3, moon_depe
             f"http, -1 Day, {dashboard}/action/shift-holiday/{holiday_date}/-1, method=GET"
         ),
     )
-
-
-def schedule_deadman_switch(tomorrow_str, day_name):
-    """Schedule a 9:05 AM alert on ntfy.sh servers for tomorrow.
-    If the PC is on and the bot runs, the success notification makes this redundant.
-    If the PC is off, this still fires from ntfy.sh cloud — alerting the user."""
-    from datetime import datetime, timedelta
-
-    tomorrow = datetime.strptime(tomorrow_str, "%Y-%m-%d")
-    deliver_at = tomorrow.replace(hour=9, minute=5)
-    now = datetime.now()
-    delay_secs = int((deliver_at - now).total_seconds())
-    if delay_secs <= 0:
-        return
-
-    dashboard = get_dashboard_url()
-    notify(
-        f"Time-In may not have run today ({day_name} {tomorrow_str}). "
-        f"Your PC might be off. Mark attendance manually if needed.",
-        title="Time-In Alert - PC Offline?",
-        priority="high",
-        tags="warning,computer",
-        click=f"{dashboard}/?tab=home",
-        actions=(
-            f"view, Mark Time-In, {dashboard}/action/timein-now; "
-            f"http, Skip Today, {dashboard}/action/skip-date/{tomorrow_str}, method=GET; "
-            f"view, Dashboard, {dashboard}/?tab=home"
-        ),
-        delay=f"{delay_secs}s",
-    )
-    log.info("Dead man's switch scheduled for %s 09:05 (%ds delay)", tomorrow_str, delay_secs)

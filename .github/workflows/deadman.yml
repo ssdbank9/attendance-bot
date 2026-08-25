@@ -1,0 +1,60 @@
+# Conditional dead man's switch for Time-In.
+#
+# MUST run on a GitHub-hosted runner, not the self-hosted one in
+# attendance.yml. The entire point of this alert is to reach the user when the
+# desktop is off - a self-hosted runner is that same desktop, so it would be
+# down exactly when the alert is needed.
+#
+# It never contacts the AKU portal. portalservice.aku.edu is a private-network
+# address unreachable from GitHub's cloud runners (see attendance.yml), so this
+# reads the state the desktop syncs into this repo instead: timein_status.json,
+# holidays.json, blackout.json and notification_prefs.json, all pushed by
+# cloud_sync.py. A desktop that is off syncs nothing, the status stays on
+# yesterday's date, and the alert fires - which is the behaviour we want.
+#
+# Timing: 04:20 UTC = 09:20 PKT. Deliberately later than the old fixed 09:05.
+# The local Time-In window closes at 09:05 and the self-hosted fallback in
+# attendance.yml picks a random moment in the ten minutes after that, so a run
+# can legitimately still be in flight at 09:05. Checking at 09:20 lets both
+# finish and sync before this decides anything is wrong. If you change
+# timein.window_end in config.json, move this too.
+
+name: Deadman Check
+
+on:
+  schedule:
+    - cron: '20 4 * * 1-5'
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: 'Report the decision without sending a notification'
+        required: false
+        type: boolean
+        default: true
+
+jobs:
+  deadman:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out synced state
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      # cloud_deadman_check.py is stdlib-only on purpose, so there is nothing
+      # to install and nothing that can break this alert on a bad dependency
+      # day - the one job it has is to work when everything else is down.
+      - name: Evaluate
+        env:
+          NTFY_TOPIC: ${{ secrets.NTFY_TOPIC }}
+          NTFY_SERVER: ${{ secrets.NTFY_SERVER }}
+          DASHBOARD_URL: ${{ secrets.DASHBOARD_URL }}
+        run: |
+          if [ "${{ github.event.inputs.dry_run }}" = "true" ]; then
+            python cloud_deadman_check.py --dry-run
+          else
+            python cloud_deadman_check.py
+          fi
