@@ -27,8 +27,16 @@ Stdlib only - no pip install on the runner.
 
     python cloud_deadman_check.py [--dry-run]
 
+Exit codes matter here. A deadman that cannot send is worse than no deadman:
+it reports success every quiet morning and only reveals itself on the one
+morning it was meant to speak. So a real run exits non-zero whenever the alert
+channel is unusable - missing NTFY_TOPIC, or a send that failed - even on days
+no alert was due. That turns a silent misconfiguration into a red X plus
+GitHub's own failed-workflow email, a backup channel independent of ntfy.
+Dry runs only warn, so manual checks stay green.
+
 Environment:
-    NTFY_TOPIC     required to actually send (GitHub Actions secret)
+    NTFY_TOPIC     required; a real run FAILS without it
     NTFY_SERVER    optional, defaults to https://ntfy.sh
     DASHBOARD_URL  optional; adds the action buttons when set
 """
@@ -46,6 +54,24 @@ STATUS_FILE = BASE_DIR / "timein_status.json"
 HOLIDAYS_FILE = BASE_DIR / "holidays.json"
 BLACKOUT_FILE = BASE_DIR / "blackout.json"
 NOTIF_PREFS_FILE = BASE_DIR / "notification_prefs.json"
+
+
+def annotate(level, message):
+    """Emit a GitHub Actions annotation, so this shows on the run page and in
+    the workflow list rather than only in step logs nobody opens."""
+    print(f"::{level}::{message}")
+
+
+def summary(line):
+    """Append to the run's job summary, the first thing visible on the run."""
+    path = os.environ.get("GITHUB_STEP_SUMMARY")
+    if not path:
+        return
+    try:
+        with open(path, "a", encoding="utf-8") as f:
+            f.write(line + "\n")
+    except OSError:
+        pass
 
 
 def load_json(path):
@@ -94,7 +120,8 @@ def send_alert(day, day_name):
     topic = os.environ.get("NTFY_TOPIC", "").strip()
     server = os.environ.get("NTFY_SERVER", "https://ntfy.sh").strip().rstrip("/")
     if not topic:
-        print("NTFY_TOPIC is not set - cannot send. Set it as a repository secret.")
+        annotate("error", "Time-In is MISSING and NTFY_TOPIC is not set - "
+                          "could not notify. Set it as a repository secret.")
         return False
 
     message = (
@@ -124,8 +151,32 @@ def send_alert(day, day_name):
         print("ALERT SENT:", message)
         return True
     except Exception as e:
-        print(f"ALERT FAILED to send: {e}")
+        annotate("error", f"Time-In is MISSING and the ntfy send failed: {e}")
         return False
+
+
+def verdict(today, day):
+    """Decide whether an alert is warranted. Returns (alert_needed, reason)."""
+    prefs = load_json(NOTIF_PREFS_FILE).get("preferences", {})
+    if not prefs.get("deadman_switch", True):
+        return False, "deadman_switch is turned off in notification_prefs.json"
+
+    if today.weekday() >= 5 and not is_working_weekend(day):
+        return False, "weekend, and not listed as a working weekend"
+
+    holiday = is_holiday(day)
+    if holiday:
+        return False, f"public holiday ({holiday})"
+
+    blackout = is_blacked_out(day)
+    if blackout:
+        return False, f"blackout/leave ({blackout})"
+
+    recorded, status_date = timein_recorded(day)
+    if recorded:
+        return False, f"timein_status.json shows Time-In settled for {day}"
+
+    return True, f"no Time-In for {day} (synced status is for {status_date!r})"
 
 
 def main():
@@ -133,38 +184,42 @@ def main():
     today = pk_now()
     day = today.strftime("%Y-%m-%d")
     day_name = today.strftime("%A")
-    print(f"Deadman check for {day_name} {day} at {today:%H:%M:%S} PKT")
+    header = f"Deadman check for {day_name} {day} at {today:%H:%M:%S} PKT"
+    print(header)
+    summary(f"### {header}")
 
-    prefs = load_json(NOTIF_PREFS_FILE).get("preferences", {})
-    if not prefs.get("deadman_switch", True):
-        print("QUIET: deadman_switch is turned off in notification_prefs.json")
+    alert_needed, reason = verdict(today, day)
+    if not alert_needed:
+        print(f"QUIET: {reason}")
+        summary(f"No alert needed - {reason}.")
+    else:
+        print(f"ALERT: {reason}")
+        summary(f"**Time-In is missing** - {reason}.")
+
+    # A deadman that cannot send is worse than no deadman: it reports success
+    # every quiet morning and only reveals itself on the one morning it was
+    # supposed to speak. So the channel is checked on every run, not just when
+    # an alert is due, and a real run FAILS when it is unusable - the red X and
+    # GitHub's own failed-workflow email are then the backup channel, entirely
+    # independent of ntfy. Dry runs only warn, so manual checks stay green.
+    channel_ok = bool(os.environ.get("NTFY_TOPIC", "").strip())
+    if not channel_ok:
+        note = ("NTFY_TOPIC is not set, so this deadman cannot notify anyone. "
+                "Add it under Settings > Secrets and variables > Actions.")
+        annotate("warning" if dry_run else "error", note)
+        summary(f"**Alert channel BROKEN:** {note}")
+        if not dry_run:
+            return 1
+
+    if not alert_needed:
         return 0
 
-    if today.weekday() >= 5 and not is_working_weekend(day):
-        print("QUIET: weekend, and not listed as a working weekend")
-        return 0
-
-    holiday = is_holiday(day)
-    if holiday:
-        print(f"QUIET: public holiday ({holiday})")
-        return 0
-
-    blackout = is_blacked_out(day)
-    if blackout:
-        print(f"QUIET: blackout/leave ({blackout})")
-        return 0
-
-    recorded, status_date = timein_recorded(day)
-    if recorded:
-        print(f"QUIET: timein_status.json shows Time-In settled for {day}")
-        return 0
-
-    print(f"NO Time-In for {day} (synced status is for {status_date!r}) - alerting")
     if dry_run:
         print("DRY RUN: would have sent the alert; nothing was sent")
         return 0
-    send_alert(day, day_name)
-    return 0
+
+    # Failing here too, so a send that silently drops still surfaces as a red X.
+    return 0 if send_alert(day, day_name) else 1
 
 
 if __name__ == "__main__":
