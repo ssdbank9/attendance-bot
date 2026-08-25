@@ -46,12 +46,26 @@ def main():
             break
 
     from notify import notify
-    if paused:
+    # The notification reports the state that ACTUALLY reached the cloud, not
+    # the state requested. Announcing "RESUMED" while the sync failed is the
+    # dangerous case: remote bot_config.json still says paused, so the cloud
+    # deadman stays silent, and the only person who could notice has just been
+    # told everything is fine. Failing loudly here is the whole protection.
+    if not sync_ok:
+        notify(
+            f"Bot {'PAUSE' if paused else 'RESUME'} did NOT reach the cloud: "
+            f"{sync_message}. Local state changed, but the remote pause flag is "
+            "unchanged - the cloud missing-attendance alert is not trustworthy "
+            "until this is retried.",
+            title="Pause Sync FAILED", priority="urgent", tags="rotating_light",
+        )
+    elif paused:
         notify("Bot PAUSED - no attendance will be marked until resumed.",
                 title="Bot Paused", priority="high", tags="pause_button")
     else:
         notify("Bot RESUMED - attendance marking is active again.",
                 title="Bot Resumed", tags="arrow_forward")
+
     print(f"paused={paused}")
     if not sync_ok:
         print(f"GitHub pause-state sync failed after retry: {sync_message}")

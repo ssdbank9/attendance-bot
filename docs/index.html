@@ -424,7 +424,14 @@ const CACHE_KEY = 'att_cache';
 const TOKEN_KEY = 'gh_token';
 const TOKEN_EXPIRY_KEY = 'gh_token_expires_at';
 const TOKEN_TTL_MS = 60 * 60 * 1000;
-const today = () => new Date().toISOString().slice(0,10);
+// PKT is a fixed UTC+5 with no DST (see pk_time.py, which governs the same
+// decision on the desktop). Every calendar-day decision on this page must use
+// it: plain pkNow().toISOString() is UTC, so between 00:00 and 04:59 PKT it
+// yields the PREVIOUS Pakistan date - "Skip Tomorrow" would have skipped today,
+// and analytics ranges would be off by a day.
+const PKT_OFFSET_MS = 5 * 60 * 60 * 1000;
+const pkNow = () => new Date(Date.now() + PKT_OFFSET_MS);
+const today = () => pkNow().toISOString().slice(0,10);
 const fmt = v => v===Math.floor(v)?Math.floor(v):v;
 const esc = v => String(v == null ? '' : v).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const isIsoDate = v => typeof v === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(v);
@@ -619,17 +626,54 @@ async function togglePause() {
   showToast((paused?'Resuming':'Pausing')+' bot...', 'ok');
   try {
     const result = await dispatchWorkflowAction(mode);
-    if (result.ok) {
-      S.botConfig = {paused: !paused};
-      localStorage.setItem(CACHE_KEY, JSON.stringify(S));
+    if (!result.ok) { showToast('Failed: '+result.message, 'error'); return; }
+
+    // A 204 from the dispatch endpoint means QUEUED, not done. set_pause.py
+    // runs on the desktop afterwards and exits non-zero if it cannot sync the
+    // pause flag to this repo. Claiming "Bot resumed" here on the strength of
+    // a 204 was the dangerous path: a resume could fail to sync, leaving the
+    // remote flag paused and the cloud deadman silenced, while the only person
+    // who could notice had just been told it worked. So wait for the run's
+    // real conclusion, and re-read the synced state rather than assuming it.
+    showToast((paused?'Resume':'Pause')+' dispatched - confirming...', 'ok');
+    const conclusion = await awaitWorkflowConclusion();
+    if (conclusion === 'success') {
+      await syncData();
       renderStatus();
       showToast(paused?'Bot resumed':'Bot paused', 'ok');
+    } else if (conclusion === null) {
+      showToast('Dispatched, but the result could not be confirmed. Check the '
+                + 'Actions tab before relying on the pause state.', 'error');
     } else {
-      showToast('Failed: '+result.message, 'error');
+      showToast('Pause change FAILED on the desktop ('+conclusion+'). The '
+                + 'remote pause flag may be unchanged.', 'error');
     }
   } catch (e) {
     showToast('Failed: '+e.message, 'error');
   }
+}
+
+// Poll the attendance workflow's newest run until it finishes. Returns the
+// conclusion string, or null if it cannot be determined within the budget -
+// null means "unknown", never "fine".
+async function awaitWorkflowConclusion(timeoutMs) {
+  const budget = timeoutMs || 90000;
+  const started = Date.now();
+  await new Promise(r => setTimeout(r, 3000));   // let the run be created
+  while (Date.now() - started < budget) {
+    try {
+      const r = await fetch('https://api.github.com/repos/'+GH.repo
+                            +'/actions/workflows/attendance.yml/runs?per_page=1',
+                            {headers: GH.headers()});
+      if (r.ok) {
+        const d = await r.json();
+        const run = (d.workflow_runs || [])[0];
+        if (run && run.status === 'completed') return run.conclusion || 'unknown';
+      }
+    } catch (e) { /* transient - keep polling within the budget */ }
+    await new Promise(r => setTimeout(r, 5000));
+  }
+  return null;
 }
 
 function setSyncStatus(type, label) {
@@ -712,7 +756,7 @@ function renderBalance() {
 
 function getNextDays(n) {
   const days = [];
-  const d = new Date(); d.setDate(d.getDate()+1);
+  const d = pkNow(); d.setDate(d.getDate()+1);
   const holDates = new Set();
   ((S.holidays||{}).holidays||[]).forEach(function(h){if(!h.disabled)holDates.add(h.date)});
   const blEntries = {};
@@ -844,7 +888,7 @@ function getReportRange() {
   let start = document.getElementById('rep-start').value;
   let end = document.getElementById('rep-end').value;
   if (!start || !end) {
-    const now = new Date();
+    const now = pkNow();
     end = now.toISOString().slice(0,10);
     const weekAgo = new Date(now); weekAgo.setDate(weekAgo.getDate()-7);
     start = weekAgo.toISOString().slice(0,10);
@@ -953,7 +997,7 @@ function openLeaveModal(dateStr) {
 }
 
 function getNextWorkday() {
-  const d = new Date(); d.setDate(d.getDate()+1);
+  const d = pkNow(); d.setDate(d.getDate()+1);
   while (d.getDay()===0||d.getDay()===6) d.setDate(d.getDate()+1);
   return d.toISOString().slice(0,10);
 }
@@ -1001,7 +1045,7 @@ async function confirmLeave() {
 
   // Update local state
   const balanceBefore = cloneJson(S.balance);
-  const entry = {date:dateVal, reason:reason+(half?' (Half Day)':''), leave_type:type, days:days, added:new Date().toISOString().slice(0,16).replace('T',' ')};
+  const entry = {date:dateVal, reason:reason+(half?' (Half Day)':''), leave_type:type, days:days, added:pkNow().toISOString().slice(0,16).replace('T',' ')};
   if (!S.blackout.dates) S.blackout.dates = [];
   S.blackout.dates.push(entry);
   S.blackout.dates.sort(function(a,b){return a.date.localeCompare(b.date)});
@@ -1093,14 +1137,14 @@ async function addSkip() {
     const existing = S.blackout.dates.find(function(d){return d.date===start});
     if (existing) { showToast('Date already blocked','error'); return; }
     skipKind = 'date';
-    skipEntry = {date:start, reason:reason, added:new Date().toISOString().slice(0,16).replace('T',' ')};
+    skipEntry = {date:start, reason:reason, added:pkNow().toISOString().slice(0,16).replace('T',' ')};
     S.blackout.dates.push(skipEntry);
     S.blackout.dates.sort(function(a,b){return a.date.localeCompare(b.date)});
   } else {
     const existing = S.blackout.ranges.find(function(r){return r.start===start && r.end===end});
     if (existing) { showToast('Range already added','error'); return; }
     skipKind = 'range';
-    skipEntry = {start:start, end:end, reason:reason, added:new Date().toISOString().slice(0,16).replace('T',' ')};
+    skipEntry = {start:start, end:end, reason:reason, added:pkNow().toISOString().slice(0,16).replace('T',' ')};
     S.blackout.ranges.push(skipEntry);
     S.blackout.ranges.sort(function(a,b){return a.start.localeCompare(b.start)});
   }

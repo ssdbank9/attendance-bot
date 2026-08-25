@@ -357,6 +357,13 @@ def portal_entry_predates_attempt(message, label, attempted_at):
     return portal_dt < attempted_minute
 
 
+# One portal timestamp, e.g. "Tue, Aug 25, 2026 - 10:03 PM PST". Shared by the
+# success allowlist and parse_aku_datetime so both agree on what the service's
+# confirmed date/time actually looks like.
+AKU_TIMESTAMP = (r"\w+,\s*\w+\s+\d{1,2},\s*\d{4}\s*-\s*"
+                 r"\d{1,2}:\d{2}\s*[AP]M(?:\s+[A-Z]{2,5})?")
+
+
 def classify_aku_message(message):
     """Given the AKU API's TimeInTimeOutResult text, decide whether it means
     the action succeeded (or was already done) vs a real error. Returns
@@ -372,13 +379,21 @@ def classify_aku_message(message):
         r"Time\s*(?:In|Out)\s+already\s+Entered\s+for\s+Today\b",
         r"Time\s+In\s+and\s+Time\s+Out\s+already\s+entered\s+for\s+Today\b",
         # A successful Time-Out reports the closed session pair WITHOUT the
-        # word "Successfully". Observed live on 2026-08-20 at 20:05, an
-        # attendance-marking run that really did succeed:
-        #   "<name>\nTimed In: Tue, Aug 18 ... \n Timed Out: Thu, Aug 20 ..."
+        # word "Successfully". Observed live twice - 2026-08-20 20:05 and
+        # 2026-08-25 22:03, both runs that really did record attendance:
+        #   "<name>\nTimed In: Tue, Aug 25 ... \n Timed Out: Tue, Aug 25 ..."
         # Omitting this shape makes every normal Time-Out fail closed, retry
         # three times and fire an urgent FAILED alert while the portal has in
         # fact recorded the action - so the allowlist has to include it.
-        r"(?:[^\r\n<>]{1,120}\r?\n)?\s*Timed\s+(?:In|Out):\s*\w",
+        #
+        # It demands a COMPLETE portal timestamp, not merely a word after the
+        # colon. An earlier version ended at ":\s*\w", which also accepted
+        # "Timed In: Error" and "Maintenance mode\nTimed Out: Service
+        # unavailable" - error text carried inside an otherwise valid JSON
+        # result would have been recorded as success, reviving exactly the
+        # fail-open behaviour this allowlist replaced. The date/time structure
+        # is the part an error string cannot fake.
+        r"(?:[^\r\n<>]{1,120}\r?\n)?\s*Timed\s+(?:In|Out):\s*" + AKU_TIMESTAMP,
     )
     if any(re.match(pattern, message, re.IGNORECASE) for pattern in known_good):
         return True, message

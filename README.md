@@ -119,10 +119,12 @@ Write these with Python, not `Out-File -Encoding utf8` or `>`. Windows
 PowerShell 5.1 emits UTF-8 **with a byte-order mark**, and the loaders here do
 not tolerate one. `timein_bot.is_blacked_out` opens `blackout.json` with no
 explicit encoding and no exception handling, so a BOM raises
-`JSONDecodeError` and aborts the attendance run; `cloud_deadman_check.load_json`
-instead swallows the error and returns `{}`, which reads as "no leave booked"
-and would allow attendance to be marked on a leave day. Both failures are
-silent at the point of editing.
+`JSONDecodeError` and aborts the normal scheduled/fallback run (a manual
+`--now` run bypasses that guard, so it is the guarded path that breaks).
+`cloud_deadman_check.load_json` instead swallows the error and returns `{}`,
+which reads as "no leave booked" and produces a false missing-attendance alert
+on a leave day - it cannot mark attendance itself. Both failures are silent at
+the point of editing.
 
 `attendance.db` is the source of truth and regenerates both exports on the
 first recorded event, so deleting them is safe. Because the database starts
@@ -210,7 +212,7 @@ Other state files:
 | `holidays.json` | Holiday calendar, confirmation, moon-dependent, and disabled state |
 | `leave_balance.json` | Repository-facing leave balance projection |
 | `notification_prefs.json` | Notification switches and optional admin email |
-| `bot_config.json` | Repository-facing `paused` plus PKT `updated_at`; the deadman honors a pause only while this state is valid and no more than 36 hours old |
+| `bot_config.json` | Repository-facing `paused` plus PKT `updated_at`; the deadman honors a valid boolean pause indefinitely, and reports an unusually old one as a warning rather than alerting |
 | `.dashboard_auth_token` | Generated local dashboard login secret; gitignored |
 
 `cloud_sync.py` has an explicit repository-file allowlist and refuses credential sync. AKU and portal credentials must not be added to tracked JSON, workflow inputs, Actions logs, or the Pages application.
@@ -294,7 +296,7 @@ The bot queries SQLite for the latest successful prior-day Time-In with no succe
 
 ### Pause/resume reports a GitHub sync failure
 
-The local state has changed, but the dashboard now reports the remote failure instead of claiming success. Retry after checking `cloud_sync.github` access. A remote paused state can suppress the cloud deadman only for 36 hours from its valid timezone-aware `updated_at`; stale or missing timestamps are degraded and cannot suppress a missing-attendance alert indefinitely.
+The local state has changed, but the dashboard now reports the remote failure instead of claiming success. Retry after checking `cloud_sync.github` access. A remote paused state suppresses the cloud deadman for as long as it is set, so an unsynced resume must be retried; the deadman surfaces an old `updated_at`; stale or missing timestamps are degraded and cannot suppress a missing-attendance alert indefinitely.
 
 ### Setup stops during pip installation
 
@@ -336,7 +338,7 @@ To halt future execution while investigating, use the authenticated dashboard pa
 - The public GitHub Pages client still handles a broad classic PAT in browser memory/session storage. The one-hour expiry is local hardening, not revocation; GitHub-side expiry and manual revocation remain the owner's responsibility.
 - Repository readers can see tracked attendance status, holidays, blackouts/leave, notification preferences, leave balance, and pause state. Repository visibility is not changed by this project.
 - GitHub JSON updates use per-file optimistic concurrency. Conflict retries now reapply semantic operations or refuse safely, but related changes across two files (for example, a leave entry and leave balance) are not a repository-wide transaction; the UI reports partial failure and reloads authoritative state.
-- Pause-state freshness bounds deadman suppression but means a deliberate pause longer than 36 hours must be refreshed or the deadman treats it as degraded.
+- A pause suppresses the cloud deadman indefinitely, deliberately: expiring it would alert daily through a legitimate long pause. The failed-resume blind spot is instead closed by reporting sync failure loudly - `set_pause.py` exits non-zero and notifies at urgent priority, both dashboard routes surface the error, and the Pages toggle waits for the run's real conclusion. A corrupt or non-boolean `paused` value never suppresses an alert.
 - The deadman validates notification configuration locally but does not probe ntfy on every quiet day. A wrong but well-formed topic or an ntfy outage may only be discovered when an alert is attempted; workflow failure email is the backup signal.
 - Randomized timing, retries, Selenium, self-hosted workflows, and wake settings reduce operational gaps but cannot guarantee attendance when the PC is off, the AKU network/service is unavailable, credentials expire, Windows does not wake, or GitHub/ntfy is unavailable.
 

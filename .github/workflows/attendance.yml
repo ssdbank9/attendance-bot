@@ -80,14 +80,18 @@ jobs:
           if ([string]::IsNullOrWhiteSpace($inputAction)) {
             $inputAction = "auto"
           }
-          if ($allowedActions -notcontains $inputAction) {
+          if ($allowedActions -cnotcontains $inputAction) {
             throw "Invalid dispatch action. Allowed values: $($allowedActions -join ', ')"
           }
           if ($inputAction -and $inputAction -ne "auto") {
             $mode = $inputAction
             $runFlag = "--now"
           } else {
-            $hour = [int](Get-Date -Format "HH")
+            # PKT explicitly, not the runner's configured timezone. PKT is a
+            # fixed UTC+5 with no DST, matching pk_time.py, which governs the
+            # same decision in the bot itself. A runner left on another zone
+            # would otherwise pick timeout in the morning or timein at night.
+            $hour = [int]([DateTime]::UtcNow.AddHours(5).ToString("HH"))
             if ($hour -lt 12) { $mode = "timein" } else { $mode = "timeout" }
             $runFlag = "--fallback"
           }
@@ -106,12 +110,12 @@ jobs:
         run: |
           $allowedModes = @("timein", "timeout", "pause", "resume", "update-windows")
           $mode = $env:MODE
-          if ($allowedModes -notcontains $mode) {
+          if ($allowedModes -cnotcontains $mode) {
             throw "Invalid mode received from action step"
           }
 
           $runFlag = $env:RUN_FLAG
-          if ($runFlag -notin @("--now", "--fallback")) {
+          if ($runFlag -cnotin @("--now", "--fallback")) {
             throw "Invalid run flag received from action step"
           }
 
