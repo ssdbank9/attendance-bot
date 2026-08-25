@@ -77,6 +77,110 @@ For the deadman workflow, configure repository Actions secrets as needed:
 - `NTFY_SERVER` (optional; defaults to `https://ntfy.sh`)
 - `DASHBOARD_URL` (optional; adds dashboard action links)
 
+## Handing this to another user
+
+This system is single-user per installation. Everything identifying a person is
+global: one `config.json`, one `attendance.db`, one dashboard on port 5000, one
+ntfy topic, and one set of `TimeInBot*` scheduled task names. There is no user
+table. A second person therefore needs their own independent installation on
+their own computer, not an account on yours.
+
+Two hard requirements before starting. The new user must be on the **AKU
+network** — `portalservice.aku.edu` is a private address and no execution path
+works off it — and their computer must be **awake** near their Time-In window.
+Sleep is fine, because the bot registers a wake-capable one-shot task for its
+randomized time, but a powered-off machine cannot mark attendance.
+
+### 1. Clone, and do not copy your own installation
+
+```powershell
+git clone https://github.com/ssdbank9/attendance-bot.git
+Set-Location attendance-bot
+```
+
+Clone rather than copying a working directory. `config.json`,
+`.dashboard_auth_token`, and `attendance.db` are gitignored, so a clone
+correctly excludes your credentials, your dashboard login token, and your
+attendance database. Copying a folder would carry all three.
+
+### 2. Reset the state a clone still carries
+
+Several state files **are** tracked, so a clone arrives holding the previous
+user's records. `setup_new_user.py` does not clear them: it creates those files
+only when they are missing, and in a clone they already exist.
+
+```powershell
+Remove-Item timein_status.json, timein_history.json -ErrorAction SilentlyContinue
+python -c "import json; json.dump({'dates': [], 'ranges': [], 'working_weekends': []}, open('blackout.json', 'w', encoding='utf-8'), indent=2)"
+python -c "import json; json.dump({'paused': False}, open('bot_config.json', 'w', encoding='utf-8'), indent=2)"
+```
+
+Write these with Python, not `Out-File -Encoding utf8` or `>`. Windows
+PowerShell 5.1 emits UTF-8 **with a byte-order mark**, and the loaders here do
+not tolerate one. `timein_bot.is_blacked_out` opens `blackout.json` with no
+explicit encoding and no exception handling, so a BOM raises
+`JSONDecodeError` and aborts the attendance run; `cloud_deadman_check.load_json`
+instead swallows the error and returns `{}`, which reads as "no leave booked"
+and would allow attendance to be marked on a leave day. Both failures are
+silent at the point of editing.
+
+`attendance.db` is the source of truth and regenerates both exports on the
+first recorded event, so deleting them is safe. Because the database starts
+empty while those JSON files do not, skipping this step leaves the dashboard
+displaying the previous user's attendance until their own first run.
+
+Then personalize two files by hand:
+
+- `notification_prefs.json` — replace `admin_email` with the new user's own
+  attendance administrator. The failure notification builds a pre-filled
+  correction request to that address.
+- `leave_balance.json` — replace the year and entitlements with theirs.
+
+Keep `holidays.json`. Pakistan public holidays are not user-specific, and
+setup re-populates the current year regardless.
+
+### 3. Run setup
+
+```powershell
+python -m pip install requests
+python setup_new_user.py
+```
+
+Setup prompts for the employee ID and attendance password, the portal
+username and password, and the four time windows. It generates a **new random
+ntfy topic**, installs dependencies fail-fast, populates holidays, and
+registers the six scheduled tasks under `pythonw.exe` with `Hidden` set so
+none of them draws a console window.
+
+### 4. Verify without marking attendance
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\check_quiet.ps1
+```
+
+Expect `RESULT: PASS`. Do not use `timein --now` as an installation test; that
+creates a real attendance action.
+
+### 5. Their phone
+
+1. Install ntfy — Android `io.heckel.ntfy`, iOS `apps.apple.com/app/ntfy/id1625396347`.
+2. Subscribe to the topic setup printed, in the form `timeinbot-<their-id>-xxxxx`.
+   Never reuse an existing topic: both users would receive each other's
+   notifications, and either could publish to the other. The topic is the only
+   access control ntfy applies, so it functions as a password.
+3. Dashboard at `http://<their-PC-IP>:5000` on the same Wi-Fi. The login token
+   is in `.dashboard_auth_token` on their computer.
+4. For access from other networks, install Tailscale on both devices, then
+   `python setup_new_user.py --set-tailscale <their-tailscale-IP>`.
+
+### What a fresh installation does not include
+
+`cloud_sync` and the 09:20 deadman alert are unconfigured. Everything else
+works without them; the new user simply receives no warning on a morning their
+computer never came on. Enabling it requires their own GitHub repository, a
+`cloud_sync.github` block in `config.json`, and the Actions secrets listed
+under Optional cloud configuration.
+
 ## Configuration and secret ownership
 
 `config.json` is local-only and gitignored. Its current schema is:
