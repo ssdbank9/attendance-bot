@@ -13,7 +13,13 @@ decides from the state the desktop syncs into this repo:
     timein_status.json      did today's Time-In actually land
     holidays.json           is today a public holiday
     blackout.json           is today leave, a sick day, a working weekend
+    bot_config.json         is the bot paused
     notification_prefs.json is the deadman_switch alert wanted at all
+
+Only a legal working day can produce an alert - a normal weekday, no holiday,
+no leave, bot not paused. Those quiet cases mirror should_run_today() in
+timein_bot.py exactly: if the bot would not have marked attendance today, a
+missing Time-In is the expected outcome, not a fault.
 
 If the desktop is off, none of that is fresh: timein_status.json still shows
 yesterday, so the alert fires - correctly. If the desktop ran and synced, the
@@ -66,6 +72,7 @@ STATUS_FILE = BASE_DIR / "timein_status.json"
 HOLIDAYS_FILE = BASE_DIR / "holidays.json"
 BLACKOUT_FILE = BASE_DIR / "blackout.json"
 NOTIF_PREFS_FILE = BASE_DIR / "notification_prefs.json"
+BOT_CONFIG_FILE = BASE_DIR / "bot_config.json"
 
 
 def annotate(level, message):
@@ -173,7 +180,7 @@ def send_alert(day, day_name):
         headers["Click"] = f"{dashboard}/?tab=home"
         headers["Actions"] = (
             f"view, Mark Time-In, {dashboard}/action/timein-now; "
-            f"http, Skip Today, {dashboard}/action/skip-date/{day}, method=GET; "
+            f"view, Skip Today, {dashboard}/action/skip-date/{day}; "
             f"view, Dashboard, {dashboard}/?tab=home"
         )
 
@@ -199,7 +206,23 @@ def deadman_wanted():
 
 
 def verdict(today, day):
-    """Decide whether an alert is warranted. Returns (alert_needed, reason)."""
+    """Decide whether an alert is warranted. Returns (alert_needed, reason).
+
+    The quiet cases mirror should_run_today() in timein_bot.py exactly, in the
+    same order: paused, weekend, holiday, blackout. If the bot would not have
+    marked attendance today, a missing Time-In is the expected outcome and not
+    something to wake anyone about. Only a legal working day - a normal
+    weekday, no holiday, no leave, bot not paused - can produce an alert.
+
+    Pause is read from bot_config.json rather than config.json: config.json is
+    local-only and gitignored, so it never reaches this runner. Every pause
+    path (the dashboard's /action/toggle-pause and /api/toggle-pause, and
+    set_pause.py for the workflow) mirrors the flag into bot_config.json and
+    syncs it, which is why this can be trusted.
+    """
+    if load_json(BOT_CONFIG_FILE).get("paused", False):
+        return False, "the bot is paused (bot_config.json)"
+
     if today.weekday() >= 5 and not is_working_weekend(day):
         return False, "weekend, and not listed as a working weekend"
 

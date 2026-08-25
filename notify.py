@@ -128,12 +128,12 @@ def notify_status(mode, action_time):
     if mode == "timein":
         actions = (
             f"view, Time Out Now, {dashboard}/action/timeout-now; "
-            f"http, Skip Tomorrow, {dashboard}/action/skip-tomorrow, method=GET; "
+            f"view, Skip Tomorrow, {dashboard}/action/skip-tomorrow; "
             f"view, Dashboard, {dashboard}/?tab=home"
         )
     else:
         actions = (
-            f"http, Skip Tomorrow, {dashboard}/action/skip-tomorrow, method=GET; "
+            f"view, Skip Tomorrow, {dashboard}/action/skip-tomorrow; "
             f"view, Dashboard, {dashboard}/?tab=home"
         )
     notify(
@@ -156,7 +156,7 @@ def notify_skip(mode, reason):
         tags="fast_forward",
         click=f"{dashboard}/?tab=holidays",
         actions=(
-            f"http, Cancel Skip, {dashboard}/action/cancel-skip-tomorrow, method=GET; "
+            f"view, Cancel Skip, {dashboard}/action/cancel-skip-tomorrow; "
             f"view, Manage Leave, {dashboard}/?tab=holidays"
         ),
     )
@@ -192,7 +192,7 @@ def notify_failure(mode, attempts):
     else:
         actions = (
             f"view, {action_label}, {action_url}; "
-            f"http, Skip Tomorrow, {dashboard}/action/skip-tomorrow, method=GET; "
+            f"view, Skip Tomorrow, {dashboard}/action/skip-tomorrow; "
             f"view, Dashboard, {dashboard}/?tab=home"
         )
     notify(
@@ -215,7 +215,7 @@ def notify_tomorrow(day_name, date_str):
         tags="calendar",
         click=f"{dashboard}/?tab=home",
         actions=(
-            f"http, Skip Tomorrow, {dashboard}/action/skip-tomorrow, method=GET; "
+            f"view, Skip Tomorrow, {dashboard}/action/skip-tomorrow; "
             f"view, Dashboard, {dashboard}/?tab=home"
         ),
     )
@@ -228,7 +228,7 @@ def notify_tomorrow_skipped(day_name, reason):
         title="Tomorrow Skipped",
         tags="no_entry_sign",
         click=f"{dashboard}/?tab=home",
-        actions=f"http, Un-skip Tomorrow, {dashboard}/action/cancel-skip-tomorrow, method=GET; view, Manage Leave, {dashboard}/?tab=holidays",
+        actions=f"view, Un-skip Tomorrow, {dashboard}/action/cancel-skip-tomorrow; view, Manage Leave, {dashboard}/?tab=holidays",
     )
 
 
@@ -239,8 +239,8 @@ def notify_tomorrow_holiday(day_name, label, holiday_date=None):
     actions = f"view, View Holidays, {dashboard}/?tab=holidays"
     if holiday_date:
         actions = (
-            f"http, Disable, {dashboard}/action/toggle-holiday/{holiday_date}, method=GET; "
-            f"http, +1 Day, {dashboard}/action/shift-holiday/{holiday_date}/1, method=GET; "
+            f"view, Disable, {dashboard}/action/toggle-holiday/{holiday_date}; "
+            f"view, +1 Day, {dashboard}/action/shift-holiday/{holiday_date}/1; "
             f"view, Holidays, {dashboard}/?tab=holidays"
         )
     notify(
@@ -264,8 +264,8 @@ def notify_holiday_reminder(holiday_label, holiday_date, days_until=3, moon_depe
         tags="bell,calendar" if not moon_dependent else "bell,crescent_moon",
         click=f"{dashboard}/?tab=holidays",
         actions=(
-            f"http, Confirm, {dashboard}/action/confirm-holiday/{holiday_date}, method=GET; "
-            f"http, +1 Day, {dashboard}/action/shift-holiday/{holiday_date}/1, method=GET; "
-            f"http, -1 Day, {dashboard}/action/shift-holiday/{holiday_date}/-1, method=GET"
+            f"view, Confirm, {dashboard}/action/confirm-holiday/{holiday_date}; "
+            f"view, +1 Day, {dashboard}/action/shift-holiday/{holiday_date}/1; "
+            f"view, -1 Day, {dashboard}/action/shift-holiday/{holiday_date}/-1"
         ),
     )
