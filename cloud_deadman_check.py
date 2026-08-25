@@ -30,20 +30,32 @@ Stdlib only - no pip install on the runner.
 Exit codes matter here. A deadman that cannot send is worse than no deadman:
 it reports success every quiet morning and only reveals itself on the one
 morning it was meant to speak. So a real run exits non-zero whenever the alert
-channel is unusable - missing NTFY_TOPIC, or a send that failed - even on days
-no alert was due. That turns a silent misconfiguration into a red X plus
-GitHub's own failed-workflow email, a backup channel independent of ntfy.
-Dry runs only warn, so manual checks stay green.
+channel is unusable - even on days no alert was due. That turns a silent
+misconfiguration into a red X plus GitHub's own failed-workflow email, a backup
+channel independent of ntfy. Dry runs only warn, so manual checks stay green.
+
+What that check does and does not cover: it confirms a topic is set and that
+the composed publish URL is a well-formed http(s) address. It deliberately does
+NOT contact ntfy, because a daily network probe would go red on any transient
+blip and teach the reader to ignore the red - the opposite of the point. So a
+wrong-but-well-formed topic, or an ntfy outage, is still only discovered when an
+alert is actually attempted.
 
 Environment:
     NTFY_TOPIC     required; a real run FAILS without it
     NTFY_SERVER    optional, defaults to https://ntfy.sh
     DASHBOARD_URL  optional; adds the action buttons when set
+
+Read these with `or`, never with os.environ.get's default: the workflow maps
+each one from a secret, and GitHub still defines the variable when the secret
+does not exist - as an empty string. The default argument therefore never
+fires, and "" would silently compose a publish URL of "/topic".
 """
 
 import json
 import os
 import sys
+import urllib.parse
 import urllib.request
 from pathlib import Path
 
@@ -116,14 +128,36 @@ def timein_recorded(day):
     return ti.get("status") in ("success", "skipped"), ti.get("date")
 
 
-def send_alert(day, day_name):
-    topic = os.environ.get("NTFY_TOPIC", "").strip()
-    server = os.environ.get("NTFY_SERVER", "https://ntfy.sh").strip().rstrip("/")
-    if not topic:
-        annotate("error", "Time-In is MISSING and NTFY_TOPIC is not set - "
-                          "could not notify. Set it as a repository secret.")
-        return False
+def env(name, default=""):
+    """Read an env var treating "" as absent.
 
+    GitHub defines a variable for every `env:` entry in the workflow even when
+    the secret behind it does not exist, handing us "" rather than nothing. So
+    os.environ.get(name, default) returns "" and the default never applies.
+    """
+    return (os.environ.get(name) or default).strip()
+
+
+def publish_url():
+    return f"{env('NTFY_SERVER', 'https://ntfy.sh').rstrip('/')}/{env('NTFY_TOPIC')}"
+
+
+def channel_problem():
+    """Why the alert channel is unusable, or None if it looks sound.
+
+    Deliberately offline-only - see the module docstring on why this does not
+    probe ntfy.
+    """
+    if not env("NTFY_TOPIC"):
+        return "NTFY_TOPIC is not set"
+    parts = urllib.parse.urlsplit(publish_url())
+    if parts.scheme not in ("http", "https") or not parts.netloc:
+        return (f"NTFY_SERVER is not a usable URL - the publish target would be "
+                f"{publish_url()!r}")
+    return None
+
+
+def send_alert(day, day_name):
     message = (
         f"No Time-In recorded for {day_name} {day}. The desktop may be off or "
         "offline. Mark attendance manually if needed."
@@ -134,7 +168,7 @@ def send_alert(day, day_name):
         "Tags": "warning,computer",
     }
 
-    dashboard = os.environ.get("DASHBOARD_URL", "").strip().rstrip("/")
+    dashboard = env("DASHBOARD_URL").rstrip("/")
     if dashboard:
         headers["Click"] = f"{dashboard}/?tab=home"
         headers["Actions"] = (
@@ -143,24 +177,29 @@ def send_alert(day, day_name):
             f"view, Dashboard, {dashboard}/?tab=home"
         )
 
-    req = urllib.request.Request(
-        f"{server}/{topic}", data=message.encode("utf-8"), headers=headers
-    )
+    # Request() is built inside the try: a malformed URL raises ValueError
+    # there, not at send time, and an uncaught traceback would lose the
+    # annotation that says attendance is actually missing.
     try:
+        req = urllib.request.Request(
+            publish_url(), data=message.encode("utf-8"), headers=headers
+        )
         urllib.request.urlopen(req, timeout=15)
         print("ALERT SENT:", message)
         return True
     except Exception as e:
-        annotate("error", f"Time-In is MISSING and the ntfy send failed: {e}")
+        annotate("error", f"Time-In is MISSING for {day} and the ntfy send "
+                          f"failed: {e}")
         return False
+
+
+def deadman_wanted():
+    """False when the user has switched the alert off in the dashboard."""
+    return load_json(NOTIF_PREFS_FILE).get("preferences", {}).get("deadman_switch", True)
 
 
 def verdict(today, day):
     """Decide whether an alert is warranted. Returns (alert_needed, reason)."""
-    prefs = load_json(NOTIF_PREFS_FILE).get("preferences", {})
-    if not prefs.get("deadman_switch", True):
-        return False, "deadman_switch is turned off in notification_prefs.json"
-
     if today.weekday() >= 5 and not is_working_weekend(day):
         return False, "weekend, and not listed as a working weekend"
 
@@ -188,6 +227,14 @@ def main():
     print(header)
     summary(f"### {header}")
 
+    # Checked before the channel is: failing a run daily for a feature the user
+    # deliberately switched off would make the red X meaningless, and the red X
+    # is the backup channel everything below depends on.
+    if not deadman_wanted():
+        print("QUIET: deadman_switch is turned off in notification_prefs.json")
+        summary("No alert needed - deadman_switch is turned off.")
+        return 0
+
     alert_needed, reason = verdict(today, day)
     if not alert_needed:
         print(f"QUIET: {reason}")
@@ -202,10 +249,17 @@ def main():
     # an alert is due, and a real run FAILS when it is unusable - the red X and
     # GitHub's own failed-workflow email are then the backup channel, entirely
     # independent of ntfy. Dry runs only warn, so manual checks stay green.
-    channel_ok = bool(os.environ.get("NTFY_TOPIC", "").strip())
-    if not channel_ok:
-        note = ("NTFY_TOPIC is not set, so this deadman cannot notify anyone. "
-                "Add it under Settings > Secrets and variables > Actions.")
+    problem = channel_problem()
+    if problem:
+        # Lead with the attendance fact when there is one. The annotation is
+        # the surface people actually read, so it must not bury today being
+        # unmarked under a configuration complaint.
+        if alert_needed:
+            note = (f"Time-In is MISSING for {day_name} {day} AND this deadman "
+                    f"could not notify you: {problem}.")
+        else:
+            note = (f"{problem}, so this deadman cannot notify anyone. "
+                    "Add it under Settings > Secrets and variables > Actions.")
         annotate("warning" if dry_run else "error", note)
         summary(f"**Alert channel BROKEN:** {note}")
         if not dry_run:
