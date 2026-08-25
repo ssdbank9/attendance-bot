@@ -63,9 +63,10 @@ import os
 import sys
 import urllib.parse
 import urllib.request
+from datetime import datetime, timedelta
 from pathlib import Path
 
-from pk_time import now as pk_now
+from pk_time import now as pk_now, PKT
 
 BASE_DIR = Path(__file__).parent
 STATUS_FILE = BASE_DIR / "timein_status.json"
@@ -73,6 +74,8 @@ HOLIDAYS_FILE = BASE_DIR / "holidays.json"
 BLACKOUT_FILE = BASE_DIR / "blackout.json"
 NOTIF_PREFS_FILE = BASE_DIR / "notification_prefs.json"
 BOT_CONFIG_FILE = BASE_DIR / "bot_config.json"
+PAUSE_MAX_AGE = timedelta(hours=36)
+PAUSE_FUTURE_SKEW = timedelta(minutes=5)
 
 
 def annotate(level, message):
@@ -205,6 +208,52 @@ def deadman_wanted():
     return load_json(NOTIF_PREFS_FILE).get("preferences", {}).get("deadman_switch", True)
 
 
+def confirmed_pause_state(today):
+    """Return (pause_is_active, staleness_note).
+
+    A pause suppresses the deadman for as long as it is set - indefinitely. A
+    pause is a deliberate decision, so expiring it after a fixed age would nag
+    the user daily through any real multi-week pause, which is precisely the
+    false-alarm pattern this whole script exists to remove.
+
+    The failure this guards against - a resume whose GitHub sync failed, so
+    remote state stays paused and the alert is silenced forever - is now caught
+    at its source instead: set_pause.py exits non-zero and the dashboard's
+    toggle returns HTTP 502 with a visible toast, so an unsynced resume is
+    reported rather than swallowed. Age here is therefore informational: it is
+    surfaced as a warning annotation, never as a reason to alert.
+
+    The one hard requirement is a real boolean. A missing, corrupt, or
+    non-boolean file must not be able to silence anything, so it reads as
+    not-paused.
+    """
+    data = load_json(BOT_CONFIG_FILE)
+    paused = data.get("paused")
+    if not isinstance(paused, bool):
+        return False, "bot_config.json has no valid boolean paused state"
+    if not paused:
+        return False, None
+
+    updated_at = data.get("updated_at")
+    if not isinstance(updated_at, str) or not updated_at.strip():
+        return True, "pause has no updated_at timestamp, so its age cannot be confirmed"
+    try:
+        parsed = datetime.fromisoformat(updated_at.strip().replace("Z", "+00:00"))
+    except ValueError:
+        return True, "pause updated_at is not a valid ISO timestamp"
+    if parsed.tzinfo is None:
+        return True, "pause updated_at has no timezone"
+
+    age = today - parsed.astimezone(PKT).replace(tzinfo=None)
+    if age < -PAUSE_FUTURE_SKEW:
+        return True, "pause updated_at is unexpectedly in the future"
+    if age > PAUSE_MAX_AGE:
+        return True, (f"pause has been active and unconfirmed for "
+                      f"{age.days}d {age.seconds // 3600}h - if this is not "
+                      f"intended, resume the bot and check the sync succeeded")
+    return True, None
+
+
 def verdict(today, day):
     """Decide whether an alert is warranted. Returns (alert_needed, reason).
 
@@ -219,26 +268,31 @@ def verdict(today, day):
     path (the dashboard's /action/toggle-pause and /api/toggle-pause, and
     set_pause.py for the workflow) mirrors the flag into bot_config.json and
     syncs it, which is why this can be trusted.
+
+    Returns (alert_needed, reason, note). `note` is advisory only - it is
+    surfaced as a warning annotation and never turns a quiet day into an alert.
     """
-    if load_json(BOT_CONFIG_FILE).get("paused", False):
-        return False, "the bot is paused (bot_config.json)"
+    pause_active, pause_note = confirmed_pause_state(today)
+    if pause_active:
+        return False, "the bot is paused (bot_config.json)", pause_note
 
     if today.weekday() >= 5 and not is_working_weekend(day):
-        return False, "weekend, and not listed as a working weekend"
+        return False, "weekend, and not listed as a working weekend", pause_note
 
     holiday = is_holiday(day)
     if holiday:
-        return False, f"public holiday ({holiday})"
+        return False, f"public holiday ({holiday})", pause_note
 
     blackout = is_blacked_out(day)
     if blackout:
-        return False, f"blackout/leave ({blackout})"
+        return False, f"blackout/leave ({blackout})", pause_note
 
     recorded, status_date = timein_recorded(day)
     if recorded:
-        return False, f"timein_status.json shows Time-In settled for {day}"
+        return False, f"timein_status.json shows Time-In settled for {day}", pause_note
 
-    return True, f"no Time-In for {day} (synced status is for {status_date!r})"
+    reason = f"no Time-In for {day} (synced status is for {status_date!r})"
+    return True, reason, pause_note
 
 
 def main():
@@ -258,13 +312,20 @@ def main():
         summary("No alert needed - deadman_switch is turned off.")
         return 0
 
-    alert_needed, reason = verdict(today, day)
+    alert_needed, reason, note = verdict(today, day)
     if not alert_needed:
         print(f"QUIET: {reason}")
         summary(f"No alert needed - {reason}.")
     else:
         print(f"ALERT: {reason}")
         summary(f"**Time-In is missing** - {reason}.")
+
+    # Advisory only. A long pause is legitimate and must not alert, but an
+    # unexpectedly old one is worth seeing on the run page - that is the shape
+    # a resume whose sync silently failed would take.
+    if note:
+        annotate("warning", f"Pause state: {note}")
+        summary(f"Pause state: {note}")
 
     # A deadman that cannot send is worse than no deadman: it reports success
     # every quiet morning and only reveals itself on the one morning it was

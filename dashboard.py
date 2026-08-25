@@ -15,8 +15,9 @@ import secrets
 import subprocess
 import sys
 import random
+import threading
 from datetime import datetime, timedelta
-from pk_time import now as pk_now
+from pk_time import now as pk_now, PKT
 from pathlib import Path
 from urllib.parse import parse_qs, urlsplit
 from flask import (Flask, redirect, url_for, jsonify, request, Response,
@@ -34,6 +35,7 @@ BLACKOUT_FILE = BASE_DIR / "blackout.json"
 HISTORY_FILE = BASE_DIR / "timein_history.json"
 NOTIF_PREFS_FILE = BASE_DIR / "notification_prefs.json"
 AUTH_TOKEN_FILE = BASE_DIR / ".dashboard_auth_token"
+_LEAVE_UPDATE_LOCK = threading.Lock()
 
 app = Flask(__name__)
 app.config.update(
@@ -556,33 +558,44 @@ def action_mark_leave(date):
     days = float(request.args.get("days", "1"))
     if days not in (0.5, 1):
         days = 1
-    config = load_config()
-    lb = config.get("leave_balance", {})
     type_map = {"casual": "casual", "sick": "sick", "earned": "earned", "other": None}
     bal_key = type_map.get(leave_type)
     type_labels = {"casual": "Casual Leave", "sick": "Sick Leave", "earned": "Earned Leave", "other": "Other Leave"}
     reason = type_labels.get(leave_type, "Leave")
     if days == 0.5:
         reason += " (Half Day)"
-    if bal_key and bal_key in lb:
-        remaining = lb[bal_key].get("remaining", 0)
-        if remaining < days:
-            return redirect(url_for("dashboard", msg=f"Insufficient {reason} balance: {remaining} days left"))
-        val = remaining - days
-        lb[bal_key]["remaining"] = int(val) if val == int(val) else val
-        save_json(CONFIG_FILE, config)
-    data = load_json(BLACKOUT_FILE)
-    if not data.get("dates"):
-        data["dates"] = []
-    for d in data["dates"]:
-        if d["date"] == date:
+    # Serialize the read/validate/commit sequence so two duplicate requests
+    # cannot both pass validation and deduct the balance twice.
+    with _LEAVE_UPDATE_LOCK:
+        config = load_config()
+        lb = config.get("leave_balance", {})
+        data = load_json(BLACKOUT_FILE)
+        if not data.get("dates"):
+            data["dates"] = []
+
+        # Validate every rejection condition before changing either file.
+        if any(d["date"] == date for d in data["dates"]):
             return redirect(url_for("dashboard", msg=f"Date {date} is already blocked"))
-    entry = {"date": date, "reason": reason, "leave_type": leave_type, "days": days, "added": pk_now().strftime("%Y-%m-%d %H:%M")}
-    data["dates"].append(entry)
-    data["dates"].sort(key=lambda d: d["date"])
-    save_json(BLACKOUT_FILE, data)
+        if bal_key and bal_key in lb:
+            remaining = lb[bal_key].get("remaining", 0)
+            if remaining < days:
+                return redirect(url_for("dashboard", msg=f"Insufficient {reason} balance: {remaining} days left"))
+
+        entry = {"date": date, "reason": reason, "leave_type": leave_type,
+                 "days": days, "added": pk_now().strftime("%Y-%m-%d %H:%M")}
+        data["dates"].append(entry)
+        data["dates"].sort(key=lambda d: d["date"])
+
+        # Commit the blackout first: if that write fails, no balance can be
+        # lost. The lock keeps the paired balance update in the same operation.
+        save_json(BLACKOUT_FILE, data)
+        if bal_key and bal_key in lb:
+            val = remaining - days
+            lb[bal_key]["remaining"] = int(val) if val == int(val) else val
+            save_json(CONFIG_FILE, config)
+        _write_leave_balance(config)
+
     _sync_blackout_to_cloud()
-    _write_leave_balance(config)
     _sync_leave_balance_to_cloud()
     from notify import notify
     notify(f"{reason}: {date} ({days}d)", title="Leave Marked", tags="palm_tree")
@@ -736,25 +749,48 @@ def action_push_to_cloud():
         return redirect(url_for("dashboard", msg=f"Push failed: {e}"))
 
 
+def _sync_pause_state(paused, state_label):
+    """Mirror a timestamped pause state to GitHub, retrying once and returning
+    the real result so callers cannot report a false success."""
+    from cloud_sync import sync_github_file
+
+    payload = {
+        "paused": paused,
+        "updated_at": pk_now().replace(tzinfo=PKT).isoformat(timespec="seconds"),
+    }
+    last_message = "unknown sync failure"
+    for _attempt in range(2):
+        try:
+            ok, message = sync_github_file(
+                "bot_config.json",
+                json.dumps(payload, indent=2),
+                f"Bot {state_label} from dashboard",
+            )
+        except Exception as exc:
+            ok, message = False, str(exc)
+        if ok:
+            return True, message
+        last_message = message
+    return False, last_message
+
+
 @app.route("/action/toggle-pause")
 def action_toggle_pause():
     config = load_config()
     config["paused"] = not config.get("paused", False)
     save_json(CONFIG_FILE, config)
     state = "PAUSED" if config["paused"] else "RESUMED"
-    # Sync pause state to GitHub
-    try:
-        from cloud_sync import sync_github_file
-        import json as _json
-        bot_cfg = {"paused": config["paused"]}
-        sync_github_file("bot_config.json", _json.dumps(bot_cfg, indent=2), f"Bot {state.lower()} from dashboard")
-    except Exception:
-        pass
+    sync_ok, sync_message = _sync_pause_state(config["paused"], state.lower())
     from notify import notify
     if config["paused"]:
         notify("Bot PAUSED - no attendance will be marked until resumed.", title="Bot Paused", priority="high", tags="pause_button")
     else:
         notify("Bot RESUMED - attendance marking is active again.", title="Bot Resumed", tags="arrow_forward")
+    if not sync_ok:
+        return redirect(url_for(
+            "dashboard",
+            msg=f"Bot {state} locally; GitHub pause-state sync failed after retry: {sync_message}",
+        ))
     return redirect(url_for("dashboard", msg=f"Bot {state}"))
 
 @app.route("/api/toggle-pause")
@@ -763,17 +799,18 @@ def api_toggle_pause():
     config["paused"] = not config.get("paused", False)
     save_json(CONFIG_FILE, config)
     state = "paused" if config["paused"] else "active"
-    try:
-        from cloud_sync import sync_github_file
-        import json as _json
-        sync_github_file("bot_config.json", _json.dumps({"paused": config["paused"]}, indent=2), f"Bot {state} from dashboard")
-    except Exception:
-        pass
+    sync_ok, sync_message = _sync_pause_state(config["paused"], state)
     from notify import notify
     if config["paused"]:
         notify("Bot PAUSED - no attendance will be marked until resumed.", title="Bot Paused", priority="high", tags="pause_button")
     else:
         notify("Bot RESUMED - attendance marking is active again.", title="Bot Resumed", tags="arrow_forward")
+    if not sync_ok:
+        return jsonify({
+            "ok": False,
+            "paused": config["paused"],
+            "msg": f"Bot {state} locally; GitHub pause-state sync failed after retry: {sync_message}",
+        }), 502
     return jsonify({"ok": True, "paused": config["paused"], "msg": f"Bot {state}"})
 
 @app.route("/api/action/<path:action_path>")
@@ -1811,7 +1848,6 @@ body{{background:var(--bg);color:var(--text);font-family:-apple-system,system-ui
         btn.classList.add('paused');
         document.getElementById('pause-icon').innerHTML='&#9654;';
         document.getElementById('pause-label').textContent='Resume Bot';
-        showToast('Bot PAUSED','error');
         var banner=document.createElement('div');banner.className='paused-banner';banner.id='paused-banner';
         banner.innerHTML='BOT PAUSED &mdash; No attendance will be marked';
         var tab=document.querySelector('.tab-bar');if(tab&&!document.getElementById('paused-banner'))tab.parentNode.insertBefore(banner,tab);
@@ -1819,9 +1855,9 @@ body{{background:var(--bg);color:var(--text);font-family:-apple-system,system-ui
         btn.classList.remove('paused');
         document.getElementById('pause-icon').innerHTML='&#9208;';
         document.getElementById('pause-label').textContent='Pause Bot';
-        showToast('Bot RESUMED','ok');
         var b=document.getElementById('paused-banner');if(b)b.remove();
       }}
+      showToast(data.msg || (data.paused?'Bot PAUSED':'Bot RESUMED'), data.ok?(data.paused?'error':'ok'):'error');
     }}).catch(function(){{btn.classList.remove('ajax-loading');showToast('Failed','error')}});
   }}
   window.togglePause=togglePause;

@@ -10,6 +10,7 @@ import urllib.request
 import urllib.error
 import urllib.parse
 from pathlib import Path
+from pk_time import now as pk_now
 
 BASE_DIR = Path(__file__).parent
 CONFIG_FILE = BASE_DIR / "config.json"
@@ -171,8 +172,7 @@ def notify_failure(mode, attempts):
     action_label = "Retry Time-In" if mode == "timein" else "Retry Time-Out"
     admin_email = get_admin_email()
     if admin_email:
-        from datetime import datetime
-        today = datetime.now().strftime("%Y-%m-%d")
+        today = pk_now().strftime("%Y-%m-%d")
         admin_first = admin_email.split("@")[0].split(".")[0].capitalize()
         subject = f"Attendance Correction Request - {today}"
         body = (

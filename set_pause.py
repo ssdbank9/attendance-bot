@@ -8,6 +8,7 @@ GitHub Contents API like the other synced JSON files.
 import json
 import sys
 from pathlib import Path
+from pk_time import now as pk_now, PKT
 
 BASE_DIR = Path(__file__).parent
 CONFIG_FILE = BASE_DIR / "config.json"
@@ -25,12 +26,24 @@ def main():
     with open(CONFIG_FILE, "w") as f:
         json.dump(config, f, indent=2)
 
-    try:
-        from cloud_sync import sync_github_file
-        sync_github_file("bot_config.json", json.dumps({"paused": paused}, indent=2),
-                          f"Bot {'paused' if paused else 'resumed'} from git dashboard")
-    except Exception:
-        pass
+    from cloud_sync import sync_github_file
+    pause_state = {
+        "paused": paused,
+        "updated_at": pk_now().replace(tzinfo=PKT).isoformat(timespec="seconds"),
+    }
+    sync_ok = False
+    sync_message = "unknown sync failure"
+    for _attempt in range(2):
+        try:
+            sync_ok, sync_message = sync_github_file(
+                "bot_config.json",
+                json.dumps(pause_state, indent=2),
+                f"Bot {'paused' if paused else 'resumed'} from git dashboard",
+            )
+        except Exception as exc:
+            sync_ok, sync_message = False, str(exc)
+        if sync_ok:
+            break
 
     from notify import notify
     if paused:
@@ -40,6 +53,9 @@ def main():
         notify("Bot RESUMED - attendance marking is active again.",
                 title="Bot Resumed", tags="arrow_forward")
     print(f"paused={paused}")
+    if not sync_ok:
+        print(f"GitHub pause-state sync failed after retry: {sync_message}")
+        sys.exit(1)
 
 
 if __name__ == "__main__":

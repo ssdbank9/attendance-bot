@@ -52,8 +52,14 @@ jobs:
           NTFY_TOPIC: ${{ secrets.NTFY_TOPIC }}
           NTFY_SERVER: ${{ secrets.NTFY_SERVER }}
           DASHBOARD_URL: ${{ secrets.DASHBOARD_URL }}
+          # Via env, never interpolated into the run: script. A ${{ }} expression
+          # inside run: is substituted before the shell parses it, so a crafted
+          # dispatch input becomes shell code - the same flaw fixed in
+          # attendance.yml. This job can read NTFY_TOPIC, so injection here
+          # means secret exfiltration even though the runner is GitHub-hosted.
+          DRY_RUN: ${{ github.event.inputs.dry_run }}
         run: |
-          if [ "${{ github.event.inputs.dry_run }}" = "true" ]; then
+          if [ "$DRY_RUN" = "true" ]; then
             python cloud_deadman_check.py --dry-run
           else
             python cloud_deadman_check.py

@@ -228,13 +228,8 @@ def pending_prior_day_timein():
     of which calendar day it's closed on - so a Time-Out attempt today should
     be allowed to complete a dangling Time-In from an earlier day."""
     today_str = pk_now().strftime("%Y-%m-%d")
-    ti = db.get_latest("timein")
-    to = db.get_latest("timeout")
-    ti_date = (ti or {}).get("date", "")
-    if (ti and ti["status"] == "success" and ti_date and ti_date < today_str
-            and (not to or to.get("date") != ti_date or to.get("status") != "success")):
-        return ti_date
-    return None
+    ti = db.get_latest_unmatched_successful_timein(today_str)
+    return (ti or {}).get("date")
 
 
 def should_run_today(mode):
@@ -366,16 +361,28 @@ def classify_aku_message(message):
     """Given the AKU API's TimeInTimeOutResult text, decide whether it means
     the action succeeded (or was already done) vs a real error. Returns
     (ok: bool, message: str)."""
-    if isinstance(message, list):
-        message = message[0] if message else ""
-    if not message:
+    message = _aku_message_text(message)
+    if not isinstance(message, str) or not message.strip():
         return False, "API returned empty response"
-    msg_lower = message.lower()
-    if "invalid" in msg_lower or "does not exist" in msg_lower or "no time in information" in msg_lower:
-        return False, "API error: " + message
-    if "error" in msg_lower and "already" not in msg_lower:
-        return False, "API error: " + message
-    return True, message
+    message = message.strip()
+    known_good = (
+        # The live service may prefix the success line with the employee's
+        # display name, followed by one newline.
+        r"(?:[^\r\n<>]{1,120}\r?\n)?Successfully\s+Timed\s+(?:In|Out)\b",
+        r"Time\s*(?:In|Out)\s+already\s+Entered\s+for\s+Today\b",
+        r"Time\s+In\s+and\s+Time\s+Out\s+already\s+entered\s+for\s+Today\b",
+        # A successful Time-Out reports the closed session pair WITHOUT the
+        # word "Successfully". Observed live on 2026-08-20 at 20:05, an
+        # attendance-marking run that really did succeed:
+        #   "<name>\nTimed In: Tue, Aug 18 ... \n Timed Out: Thu, Aug 20 ..."
+        # Omitting this shape makes every normal Time-Out fail closed, retry
+        # three times and fire an urgent FAILED alert while the portal has in
+        # fact recorded the action - so the allowlist has to include it.
+        r"(?:[^\r\n<>]{1,120}\r?\n)?\s*Timed\s+(?:In|Out):\s*\w",
+    )
+    if any(re.match(pattern, message, re.IGNORECASE) for pattern in known_good):
+        return True, message
+    return False, "Unrecognized API response: " + message[:200]
 
 
 def call_aku_api(mode, user_id, password):

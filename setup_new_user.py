@@ -15,6 +15,7 @@ import sys
 from pathlib import Path
 
 BASE_DIR = Path(__file__).parent
+NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0x08000000)
 
 
 def generate_ntfy_topic(user_id):
@@ -135,21 +136,31 @@ def install_dependencies():
     packages = ["selenium", "flask", "hijri-converter"]
     for pkg in packages:
         print(f"  Installing {pkg}...")
-        subprocess.run(
-            [sys.executable, "-m", "pip", "install", pkg],
-            capture_output=True,
-        )
+        try:
+            subprocess.run(
+                [sys.executable, "-m", "pip", "install", pkg],
+                capture_output=True,
+                text=True,
+                check=True,
+                creationflags=NO_WINDOW,
+            )
+        except subprocess.CalledProcessError as exc:
+            detail = (exc.stderr or exc.stdout or "pip returned a non-zero exit code").strip()
+            print(f"  [!] Failed to install {pkg}: {detail[:500]}")
+            print("  Setup aborted. No scheduled tasks were registered.")
+            raise SystemExit(1)
     print("  All dependencies installed.")
 
 
 def populate_holidays():
     print("\n--- Populating Holidays ---")
-    from datetime import datetime
-    year = datetime.now().year
+    from pk_time import now as pk_now
+    year = pk_now().year
     try:
         subprocess.run(
             [sys.executable, str(BASE_DIR / "manage_holidays.py"), "populate", str(year)],
             check=True,
+            creationflags=NO_WINDOW,
         )
         print(f"  Holidays populated for {year}.")
     except Exception as e:
@@ -188,11 +199,10 @@ def create_scheduled_tasks():
     bot_dir = str(BASE_DIR)
     exe = quiet_interpreter()
     if not exe:
-        exe = sys.executable
         print("  [!] pythonw.exe not found beside this interpreter.")
-        print("      Falling back to python.exe - tasks WILL flash a console window.")
-    else:
-        print(f"  Using {exe} (no console window)")
+        print("      Setup aborted before task registration; install a Python build with pythonw.exe.")
+        raise SystemExit(1)
+    print(f"  Using {exe} (no console window)")
 
     blocks = ["$ErrorActionPreference = 'Stop'"]
 

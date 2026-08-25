@@ -105,6 +105,33 @@ def get_latest(mode, date_str=None):
         conn.close()
 
 
+def get_latest_unmatched_successful_timein(before_date):
+    """Latest successful Time-In before ``before_date`` with no successful
+    Time-Out recorded for the same attendance date. Non-success rows do not
+    hide an older dangling session."""
+    init_db()
+    conn = get_connection()
+    try:
+        row = conn.execute(
+            """
+            SELECT ti.*
+            FROM events AS ti
+            WHERE ti.mode='timein' AND ti.status='success' AND ti.date < ?
+              AND NOT EXISTS (
+                SELECT 1 FROM events AS tout
+                WHERE tout.mode='timeout' AND tout.status='success'
+                  AND tout.date=ti.date
+              )
+            ORDER BY ti.date DESC, ti.id DESC
+            LIMIT 1
+            """,
+            (before_date,),
+        ).fetchone()
+        return dict(row) if row else None
+    finally:
+        conn.close()
+
+
 def get_recent_action_times(mode, before_date, limit=14):
     """Latest successful action_time per distinct date for `mode`, strictly
     before `before_date`, most recent first. Used to detect a marked time

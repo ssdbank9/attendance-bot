@@ -38,20 +38,32 @@ on:
     inputs:
       action:
         description: 'Force action (timein/timeout/pause/resume/update-windows), or leave as auto'
-        required: false
+        required: true
+        type: choice
         default: 'auto'
+        options:
+          - auto
+          - timein
+          - timeout
+          - pause
+          - resume
+          - update-windows
       ti_start:
         description: 'Time-In window start HH:MM (action=update-windows only)'
         required: false
+        type: string
       ti_end:
         description: 'Time-In window end HH:MM (action=update-windows only)'
         required: false
+        type: string
       to_start:
         description: 'Time-Out window start HH:MM (action=update-windows only)'
         required: false
+        type: string
       to_end:
         description: 'Time-Out window end HH:MM (action=update-windows only)'
         required: false
+        type: string
 
 jobs:
   mark-attendance:
@@ -60,8 +72,17 @@ jobs:
       - name: Determine action
         id: action
         shell: powershell
+        env:
+          DISPATCH_ACTION: ${{ github.event.inputs.action }}
         run: |
-          $inputAction = "${{ github.event.inputs.action }}"
+          $allowedActions = @("auto", "timein", "timeout", "pause", "resume", "update-windows")
+          $inputAction = $env:DISPATCH_ACTION
+          if ([string]::IsNullOrWhiteSpace($inputAction)) {
+            $inputAction = "auto"
+          }
+          if ($allowedActions -notcontains $inputAction) {
+            throw "Invalid dispatch action. Allowed values: $($allowedActions -join ', ')"
+          }
           if ($inputAction -and $inputAction -ne "auto") {
             $mode = $inputAction
             $runFlag = "--now"
@@ -76,12 +97,51 @@ jobs:
       - name: Mark attendance
         shell: powershell
         env:
+          MODE: ${{ steps.action.outputs.mode }}
+          RUN_FLAG: ${{ steps.action.outputs.run_flag }}
           TI_START: ${{ github.event.inputs.ti_start }}
           TI_END: ${{ github.event.inputs.ti_end }}
           TO_START: ${{ github.event.inputs.to_start }}
           TO_END: ${{ github.event.inputs.to_end }}
         run: |
-          $mode = "${{ steps.action.outputs.mode }}"
+          $allowedModes = @("timein", "timeout", "pause", "resume", "update-windows")
+          $mode = $env:MODE
+          if ($allowedModes -notcontains $mode) {
+            throw "Invalid mode received from action step"
+          }
+
+          $runFlag = $env:RUN_FLAG
+          if ($runFlag -notin @("--now", "--fallback")) {
+            throw "Invalid run flag received from action step"
+          }
+
+          function Assert-SafeTimeInput {
+            param([string]$Name, [string]$Value, [bool]$Required)
+            if ([string]::IsNullOrWhiteSpace($Value)) {
+              if ($Required) { throw "$Name is required for update-windows" }
+              return
+            }
+            if ($Value -notmatch '^(?:[01][0-9]|2[0-3]):[0-5][0-9]$') {
+              throw "$Name must use 24-hour HH:MM format"
+            }
+            $parsed = [datetime]::MinValue
+            if (-not [datetime]::TryParseExact(
+              $Value,
+              "HH:mm",
+              [Globalization.CultureInfo]::InvariantCulture,
+              [Globalization.DateTimeStyles]::None,
+              [ref]$parsed
+            )) {
+              throw "$Name is not a valid time"
+            }
+          }
+
+          $windowsRequired = $mode -eq "update-windows"
+          Assert-SafeTimeInput "ti_start" $env:TI_START $windowsRequired
+          Assert-SafeTimeInput "ti_end" $env:TI_END $windowsRequired
+          Assert-SafeTimeInput "to_start" $env:TO_START $windowsRequired
+          Assert-SafeTimeInput "to_end" $env:TO_END $windowsRequired
+
           $base = "D:/DropBox/Self/Claude/Attendance Management"
           if ($mode -eq "pause") {
             python "$base/set_pause.py" true
@@ -90,5 +150,5 @@ jobs:
           } elseif ($mode -eq "update-windows") {
             python "$base/apply_windows.py"
           } else {
-            python "$base/timein_bot.py" $mode ${{ steps.action.outputs.run_flag }}
+            python "$base/timein_bot.py" $mode $runFlag
           }

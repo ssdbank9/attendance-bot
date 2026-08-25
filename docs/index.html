@@ -4,6 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
 <meta name="theme-color" content="#1565c0">
+<meta name="referrer" content="no-referrer">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <title>Attendance Bot</title>
@@ -92,6 +93,7 @@ select.input{appearance:none;background-image:url("data:image/svg+xml,%3Csvg xml
 @keyframes spin{to{transform:rotate(360deg)}}
 .mark-leave-btn{position:fixed;bottom:70px;right:1rem;width:52px;height:52px;border-radius:50%;background:var(--primary);color:#fff;border:none;font-size:1.5rem;box-shadow:0 2px 8px rgba(0,0,0,.2);cursor:pointer;z-index:50;display:flex;align-items:center;justify-content:center}
 .mark-leave-btn:active{transform:scale(.92)}
+.security-warning{margin:.8rem 0;padding:.75rem;border:1.5px solid var(--red);border-radius:8px;background:color-mix(in srgb,var(--red) 10%,transparent);color:var(--text);font-size:.75rem;line-height:1.45;text-align:left}
 </style>
 </head>
 <body>
@@ -103,6 +105,7 @@ select.input{appearance:none;background-image:url("data:image/svg+xml,%3Csvg xml
   <div class="setup-form">
     <input class="input" id="s-token" type="password" placeholder="GitHub Personal Access Token">
     <input class="input" id="s-repo" type="text" placeholder="owner/repo" value="ssdbank9/attendance-bot">
+    <div class="security-warning"><strong>Security warning:</strong> this public GitHub Pages app receives a classic PAT with <strong>repo</strong> (full private-repository control) and <strong>workflow</strong> (run/update workflow) scope. The token is readable by scripts on this page, browser extensions, and anyone controlling this browser profile. It is kept only in this tab's session storage and expires here after 60 minutes. Use a short-lived token, select no additional scopes, never use a shared device, and clear it when finished.</div>
     <button class="btn btn-primary" onclick="testConnection()" id="s-btn">Connect &amp; Sync</button>
     <p id="s-msg" style="margin-top:.7rem;font-size:.8rem"></p>
     <details style="margin-top:1.2rem;text-align:left;font-size:.75rem;color:var(--text2)">
@@ -111,7 +114,8 @@ select.input{appearance:none;background-image:url("data:image/svg+xml,%3Csvg xml
         <li>Go to github.com &rarr; Settings &rarr; Developer settings</li>
         <li>Personal access tokens &rarr; Tokens (classic)</li>
         <li>Generate new token (classic)</li>
-        <li>Select scopes: <strong>repo</strong> (full control) and <strong>workflow</strong> (needed for the Time In/Time Out Now buttons)</li>
+        <li>Set the shortest practical GitHub expiration.</li>
+        <li>Select only <strong>repo</strong> (required for this private repo's contents) and <strong>workflow</strong> (required for action buttons); select no other scopes.</li>
         <li>Copy the token and paste above</li>
       </ol>
     </details>
@@ -249,8 +253,10 @@ select.input{appearance:none;background-image:url("data:image/svg+xml,%3Csvg xml
         <strong>Repo:</strong> <span id="set-repo"></span><br>
         <strong>Token:</strong> <span id="set-token-mask"></span>
       </div>
+      <div class="security-warning"><strong>Stored authority:</strong> classic PAT with repo + workflow scope, held only for this tab session and capped at 60 minutes. Clear it immediately on a shared or untrusted device.</div>
       <div style="display:flex;gap:.5rem">
         <button class="btn btn-outline btn-sm" onclick="syncData()">Sync Now</button>
+        <button class="btn btn-outline btn-sm" onclick="clearStoredToken(true)">Clear Token</button>
         <button class="btn btn-sm btn-danger" onclick="disconnect()">Disconnect</button>
       </div>
     </div>
@@ -352,8 +358,12 @@ select.input{appearance:none;background-image:url("data:image/svg+xml,%3Csvg xml
 <script>
 // ===== GitHub API =====
 const GH = {
-  token: null, repo: null,
+  token: null, tokenExpiresAt: 0, repo: null,
   headers() {
+    if (!this.token || !this.tokenExpiresAt || Date.now() >= this.tokenExpiresAt) {
+      clearStoredToken(true);
+      throw new Error('GitHub token expired or was cleared. Reconnect to continue.');
+    }
     return {'Authorization':'token '+this.token,'Accept':'application/vnd.github.v3+json','Content-Type':'application/json'};
   },
   async readFile(path) {
@@ -366,19 +376,31 @@ const GH = {
       return {content,sha:d.sha};
     } catch(e) { console.error('Read '+path+':',e); return {content:null,sha:null}; }
   },
-  async writeFile(path, content, sha, msg) {
+  async writeFile(path, content, sha, msg, reapply) {
+    let candidate = cloneJson(content);
     for (let attempt=0; attempt<3; attempt++) {
       try {
-        const body = {message:msg||'Update from mobile',content:btoa(unescape(encodeURIComponent(JSON.stringify(content,null,2))))};
+        const body = {message:msg||'Update from mobile',content:btoa(unescape(encodeURIComponent(JSON.stringify(candidate,null,2))))};
         if (sha) body.sha = sha;
         const r = await fetch('https://api.github.com/repos/'+this.repo+'/contents/'+path, {method:'PUT',headers:this.headers(),body:JSON.stringify(body)});
         if (r.status===409) {
           const fresh = await this.readFile(path);
-          if (fresh.sha) { sha = fresh.sha; continue; }
+          if (!fresh.sha || fresh.content===null) throw new Error('Conflict: could not reload the current '+path);
+          if (typeof reapply !== 'function') {
+            throw new Error('Conflict: '+path+' changed elsewhere; this operation cannot be safely reapplied and was not overwritten');
+          }
+          try {
+            candidate = reapply(cloneJson(fresh.content));
+          } catch (conflictError) {
+            throw new Error('Conflict: '+conflictError.message+'; '+path+' was not overwritten');
+          }
+          if (!candidate || typeof candidate !== 'object') throw new Error('Conflict: semantic operation did not produce safe content');
+          sha = fresh.sha;
+          continue;
         }
         if (!r.ok) { const e = await r.json(); throw new Error(e.message||'HTTP '+r.status); }
         const d = await r.json();
-        return {ok:true, sha:d.content.sha};
+        return {ok:true, sha:d.content.sha, content:candidate};
       } catch(e) { if (attempt===2) { console.error('Write '+path+':',e); return {ok:false,error:e.message}; } }
     }
     return {ok:false,error:'Max retries'};
@@ -399,16 +421,78 @@ const NOTIF_PREF_LABELS = {
   holiday_change: 'Holiday Changes',
 };
 const CACHE_KEY = 'att_cache';
+const TOKEN_KEY = 'gh_token';
+const TOKEN_EXPIRY_KEY = 'gh_token_expires_at';
+const TOKEN_TTL_MS = 60 * 60 * 1000;
 const today = () => new Date().toISOString().slice(0,10);
 const fmt = v => v===Math.floor(v)?Math.floor(v):v;
 const esc = v => String(v == null ? '' : v).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const isIsoDate = v => typeof v === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(v);
+const cloneJson = value => JSON.parse(JSON.stringify(value));
+
+function sameEntry(a, b, fields) {
+  return fields.every(function(field){ return (a||{})[field] === (b||{})[field]; });
+}
+
+function reapplyBalanceChange(fresh, key, beforeValue, afterValue) {
+  if (!key) return fresh;
+  if (!fresh[key] || typeof fresh[key].remaining !== 'number') {
+    throw new Error('leave balance structure changed elsewhere');
+  }
+  const current = fresh[key].remaining;
+  if (current === afterValue) return fresh;
+  if (current !== beforeValue) throw new Error(key+' leave balance changed elsewhere');
+  fresh[key].remaining = afterValue;
+  return fresh;
+}
+
+function acceptWrite(stateKey, shaKey, result) {
+  if (!result.ok) return false;
+  S[stateKey] = result.content;
+  S.shas[shaKey] = result.sha;
+  return true;
+}
+
+async function recoverWriteFailure(results, label) {
+  const errors = results.filter(function(r){return !r.ok}).map(function(r){return r.error||'unknown error'});
+  showToast(label+' not fully saved: '+errors.join('; '), 'error');
+  await syncData();
+}
+
+function clearStoredToken(showScreen) {
+  sessionStorage.removeItem(TOKEN_KEY);
+  sessionStorage.removeItem(TOKEN_EXPIRY_KEY);
+  // Remove tokens saved by older versions of this public page.
+  localStorage.removeItem('gh_token');
+  GH.token = null;
+  GH.tokenExpiresAt = 0;
+  const input = document.getElementById('s-token');
+  if (input) input.value = '';
+  if (showScreen) {
+    showSetup();
+    const msg = document.getElementById('s-msg');
+    if (msg) { msg.textContent='Token cleared. Enter a new short-lived token to reconnect.'; msg.style.color='var(--green)'; }
+  }
+}
+
+function loadStoredToken() {
+  // Never migrate the legacy persistent token: delete it and require re-entry.
+  localStorage.removeItem('gh_token');
+  const token = sessionStorage.getItem(TOKEN_KEY);
+  const expiresAt = Number(sessionStorage.getItem(TOKEN_EXPIRY_KEY)||0);
+  if (!token || !expiresAt || Date.now() >= expiresAt) {
+    clearStoredToken(false);
+    return false;
+  }
+  GH.token = token;
+  GH.tokenExpiresAt = expiresAt;
+  return true;
+}
 
 // ===== Init =====
 async function init() {
-  GH.token = localStorage.getItem('gh_token');
   GH.repo = localStorage.getItem('gh_repo');
-  if (!GH.token || !GH.repo) { showSetup(); return; }
+  if (!loadStoredToken() || !GH.repo) { showSetup(); return; }
   // Show cached data while loading
   const cached = localStorage.getItem(CACHE_KEY);
   if (cached) { try { S = JSON.parse(cached); } catch(e){} }
@@ -433,11 +517,12 @@ async function testConnection() {
   const repo = document.getElementById('s-repo').value.trim();
   if (!token||!repo) { msg.textContent='Please fill both fields'; msg.style.color='var(--red)'; return; }
   btn.textContent = 'Connecting...'; btn.disabled = true;
-  GH.token = token; GH.repo = repo;
+  GH.token = token; GH.tokenExpiresAt = Date.now() + TOKEN_TTL_MS; GH.repo = repo;
   try {
     const r = await fetch('https://api.github.com/repos/'+repo, {headers:GH.headers()});
     if (!r.ok) throw new Error('Cannot access repo (HTTP '+r.status+')');
-    localStorage.setItem('gh_token', token);
+    sessionStorage.setItem(TOKEN_KEY, token);
+    sessionStorage.setItem(TOKEN_EXPIRY_KEY, String(GH.tokenExpiresAt));
     localStorage.setItem('gh_repo', repo);
     msg.textContent = 'Connected! Loading data...';
     msg.style.color = 'var(--green)';
@@ -446,6 +531,7 @@ async function testConnection() {
     document.getElementById('app').style.display = '';
     renderAll();
   } catch(e) {
+    clearStoredToken(false);
     msg.textContent = e.message; msg.style.color = 'var(--red)';
   }
   btn.textContent = 'Connect & Sync'; btn.disabled = false;
@@ -453,7 +539,7 @@ async function testConnection() {
 
 function disconnect() {
   if (!confirm('Disconnect from GitHub? Local cache will be cleared.')) return;
-  localStorage.removeItem('gh_token'); localStorage.removeItem('gh_repo'); localStorage.removeItem(CACHE_KEY);
+  clearStoredToken(false); localStorage.removeItem('gh_repo'); localStorage.removeItem(CACHE_KEY);
   showSetup();
 }
 
@@ -826,7 +912,7 @@ function exportAttendanceCSV() {
 
 function renderSettings() {
   document.getElementById('set-repo').textContent = GH.repo;
-  document.getElementById('set-token-mask').textContent = GH.token?'\u2022\u2022\u2022\u2022'+GH.token.slice(-4):'--';
+  document.getElementById('set-token-mask').textContent = GH.token ? 'Session only; expires '+new Date(GH.tokenExpiresAt).toLocaleTimeString([], {hour:'2-digit',minute:'2-digit'}) : '--';
   const lb = S.balance||{};
   document.getElementById('set-year').value = lb.year||2026;
   document.getElementById('set-ca').value = (lb.casual||{}).annual||5;
@@ -914,6 +1000,7 @@ async function confirmLeave() {
   showToast('Marking leave...','ok');
 
   // Update local state
+  const balanceBefore = cloneJson(S.balance);
   const entry = {date:dateVal, reason:reason+(half?' (Half Day)':''), leave_type:type, days:days, added:new Date().toISOString().slice(0,16).replace('T',' ')};
   if (!S.blackout.dates) S.blackout.dates = [];
   S.blackout.dates.push(entry);
@@ -923,18 +1010,30 @@ async function confirmLeave() {
     const v = S.balance[balKey].remaining - days;
     S.balance[balKey].remaining = v===Math.floor(v)?Math.floor(v):v;
   }
+  const balanceAfter = balKey && S.balance[balKey] ? S.balance[balKey].remaining : null;
 
   // Push to GitHub
-  const [r1,r2] = await Promise.all([
-    GH.writeFile('blackout.json', S.blackout, S.shas.blackout, 'Mark '+reason+' for '+dateVal+' (mobile)'),
-    GH.writeFile('leave_balance.json', S.balance, S.shas.balance, 'Update balance: '+reason+' (mobile)')
-  ]);
-  if (r1.ok) S.shas.blackout = r1.sha;
-  if (r2.ok) S.shas.balance = r2.sha;
+  const r1 = await GH.writeFile('blackout.json', S.blackout, S.shas.blackout, 'Mark '+reason+' for '+dateVal+' (mobile)', function(fresh){
+      if (!Array.isArray(fresh.dates)) fresh.dates = [];
+      const current = fresh.dates.find(function(d){return d.date===dateVal});
+      if (current) {
+        if (sameEntry(current, entry, ['date','reason','leave_type','days'])) return fresh;
+        throw new Error('date '+dateVal+' was blocked by another writer');
+      }
+      fresh.dates.push(cloneJson(entry));
+      fresh.dates.sort(function(a,b){return a.date.localeCompare(b.date)});
+      return fresh;
+    });
+  if (!acceptWrite('blackout','blackout',r1)) { await recoverWriteFailure([r1], reason); return; }
+  const r2 = await GH.writeFile('leave_balance.json', S.balance, S.shas.balance, 'Update balance: '+reason+' (mobile)', function(fresh){
+      const before = balKey && balanceBefore[balKey] ? balanceBefore[balKey].remaining : null;
+      return reapplyBalanceChange(fresh, balKey, before, balanceAfter);
+    });
+  if (!acceptWrite('balance','balance',r2)) { await recoverWriteFailure([r2], reason); return; }
 
   localStorage.setItem(CACHE_KEY, JSON.stringify(S));
   renderAll();
-  showToast(r1.ok&&r2.ok?reason+' marked for '+dateVal:'Saved locally, sync failed','ok');
+  showToast(reason+' marked for '+dateVal,'ok');
 }
 
 async function cancelSkip(date) {
@@ -944,6 +1043,7 @@ async function cancelSkip(date) {
   if (idx===-1) return;
 
   const removed = dates[idx];
+  const balanceBefore = cloneJson(S.balance);
   dates.splice(idx,1);
 
   // Restore balance
@@ -951,14 +1051,26 @@ async function cancelSkip(date) {
     const v = S.balance[removed.leave_type].remaining + (removed.days||1);
     S.balance[removed.leave_type].remaining = v===Math.floor(v)?Math.floor(v):v;
   }
+  const balKey = removed.leave_type && removed.leave_type!=='other' ? removed.leave_type : null;
+  const balanceAfter = balKey && S.balance[balKey] ? S.balance[balKey].remaining : null;
 
   showToast('Cancelling...','ok');
-  const [r1,r2] = await Promise.all([
-    GH.writeFile('blackout.json', S.blackout, S.shas.blackout, 'Cancel '+removed.reason+' for '+date+' (mobile)'),
-    GH.writeFile('leave_balance.json', S.balance, S.shas.balance, 'Restore balance: cancel '+date+' (mobile)')
-  ]);
-  if (r1.ok) S.shas.blackout = r1.sha;
-  if (r2.ok) S.shas.balance = r2.sha;
+  const r1 = await GH.writeFile('blackout.json', S.blackout, S.shas.blackout, 'Cancel '+removed.reason+' for '+date+' (mobile)', function(fresh){
+      if (!Array.isArray(fresh.dates)) fresh.dates = [];
+      const current = fresh.dates.find(function(d){return d.date===date});
+      if (!current) return fresh;
+      if (!sameEntry(current, removed, ['date','reason','leave_type','days'])) {
+        throw new Error('the entry for '+date+' changed elsewhere');
+      }
+      fresh.dates = fresh.dates.filter(function(d){return d.date!==date});
+      return fresh;
+    });
+  if (!acceptWrite('blackout','blackout',r1)) { await recoverWriteFailure([r1], 'Cancellation'); return; }
+  const r2 = await GH.writeFile('leave_balance.json', S.balance, S.shas.balance, 'Restore balance: cancel '+date+' (mobile)', function(fresh){
+      const before = balKey && balanceBefore[balKey] ? balanceBefore[balKey].remaining : null;
+      return reapplyBalanceChange(fresh, balKey, before, balanceAfter);
+    });
+  if (!acceptWrite('balance','balance',r2)) { await recoverWriteFailure([r2], 'Cancellation'); return; }
 
   localStorage.setItem(CACHE_KEY, JSON.stringify(S));
   renderAll();
@@ -974,22 +1086,49 @@ async function addSkip() {
 
   if (!S.blackout.dates) S.blackout.dates = [];
   if (!S.blackout.ranges) S.blackout.ranges = [];
+  let skipKind = '';
+  let skipEntry = null;
 
   if (start === end) {
     const existing = S.blackout.dates.find(function(d){return d.date===start});
     if (existing) { showToast('Date already blocked','error'); return; }
-    S.blackout.dates.push({date:start, reason:reason, added:new Date().toISOString().slice(0,16).replace('T',' ')});
+    skipKind = 'date';
+    skipEntry = {date:start, reason:reason, added:new Date().toISOString().slice(0,16).replace('T',' ')};
+    S.blackout.dates.push(skipEntry);
     S.blackout.dates.sort(function(a,b){return a.date.localeCompare(b.date)});
   } else {
     const existing = S.blackout.ranges.find(function(r){return r.start===start && r.end===end});
     if (existing) { showToast('Range already added','error'); return; }
-    S.blackout.ranges.push({start:start, end:end, reason:reason, added:new Date().toISOString().slice(0,16).replace('T',' ')});
+    skipKind = 'range';
+    skipEntry = {start:start, end:end, reason:reason, added:new Date().toISOString().slice(0,16).replace('T',' ')};
+    S.blackout.ranges.push(skipEntry);
     S.blackout.ranges.sort(function(a,b){return a.start.localeCompare(b.start)});
   }
 
   showToast('Adding skip...','ok');
-  const r = await GH.writeFile('blackout.json', S.blackout, S.shas.blackout, 'Skip '+start+(end!==start?' to '+end:'')+': '+reason+' (mobile)');
-  if (r.ok) S.shas.blackout = r.sha;
+  const r = await GH.writeFile('blackout.json', S.blackout, S.shas.blackout, 'Skip '+start+(end!==start?' to '+end:'')+': '+reason+' (mobile)', function(fresh){
+    if (!Array.isArray(fresh.dates)) fresh.dates = [];
+    if (!Array.isArray(fresh.ranges)) fresh.ranges = [];
+    if (skipKind==='date') {
+      const current = fresh.dates.find(function(d){return d.date===start});
+      if (current) {
+        if (sameEntry(current, skipEntry, ['date','reason'])) return fresh;
+        throw new Error('date '+start+' was blocked by another writer');
+      }
+      fresh.dates.push(cloneJson(skipEntry));
+      fresh.dates.sort(function(a,b){return a.date.localeCompare(b.date)});
+    } else {
+      const current = fresh.ranges.find(function(item){return item.start===start && item.end===end});
+      if (current) {
+        if (sameEntry(current, skipEntry, ['start','end','reason'])) return fresh;
+        throw new Error('range '+start+' to '+end+' changed elsewhere');
+      }
+      fresh.ranges.push(cloneJson(skipEntry));
+      fresh.ranges.sort(function(a,b){return a.start.localeCompare(b.start)});
+    }
+    return fresh;
+  });
+  if (!acceptWrite('blackout','blackout',r)) { await recoverWriteFailure([r], 'Skip'); return; }
   localStorage.setItem(CACHE_KEY, JSON.stringify(S));
   renderAll();
   document.getElementById('skip-date').value='';
@@ -1002,8 +1141,12 @@ async function cancelRange(start, end) {
   if (!confirm('Cancel leave from '+start+' to '+end+'?')) return;
   S.blackout.ranges = (S.blackout.ranges||[]).filter(function(r){return !(r.start===start && r.end===end)});
   showToast('Cancelling...','ok');
-  const r = await GH.writeFile('blackout.json', S.blackout, S.shas.blackout, 'Cancel range '+start+' to '+end+' (mobile)');
-  if (r.ok) S.shas.blackout = r.sha;
+  const r = await GH.writeFile('blackout.json', S.blackout, S.shas.blackout, 'Cancel range '+start+' to '+end+' (mobile)', function(fresh){
+    if (!Array.isArray(fresh.ranges)) fresh.ranges = [];
+    fresh.ranges = fresh.ranges.filter(function(item){return !(item.start===start && item.end===end)});
+    return fresh;
+  });
+  if (!acceptWrite('blackout','blackout',r)) { await recoverWriteFailure([r], 'Cancellation'); return; }
   localStorage.setItem(CACHE_KEY, JSON.stringify(S));
   renderAll();
   showToast('Range cancelled','ok');
@@ -1018,8 +1161,13 @@ async function addWorkingWeekend() {
     S.blackout.working_weekends.sort();
   }
   showToast('Saving...','ok');
-  const r = await GH.writeFile('blackout.json', S.blackout, S.shas.blackout, 'Working weekend added: '+date+' (mobile)');
-  if (r.ok) S.shas.blackout = r.sha;
+  const r = await GH.writeFile('blackout.json', S.blackout, S.shas.blackout, 'Working weekend added: '+date+' (mobile)', function(fresh){
+    if (!Array.isArray(fresh.working_weekends)) fresh.working_weekends = [];
+    if (fresh.working_weekends.indexOf(date)===-1) fresh.working_weekends.push(date);
+    fresh.working_weekends.sort();
+    return fresh;
+  });
+  if (!acceptWrite('blackout','blackout',r)) { await recoverWriteFailure([r], 'Working weekend'); return; }
   localStorage.setItem(CACHE_KEY, JSON.stringify(S));
   renderAll();
   document.getElementById('ww-date').value='';
@@ -1029,8 +1177,12 @@ async function addWorkingWeekend() {
 async function removeWorkingWeekend(date) {
   S.blackout.working_weekends = (S.blackout.working_weekends||[]).filter(function(d){return d!==date});
   showToast('Saving...','ok');
-  const r = await GH.writeFile('blackout.json', S.blackout, S.shas.blackout, 'Working weekend removed: '+date+' (mobile)');
-  if (r.ok) S.shas.blackout = r.sha;
+  const r = await GH.writeFile('blackout.json', S.blackout, S.shas.blackout, 'Working weekend removed: '+date+' (mobile)', function(fresh){
+    if (!Array.isArray(fresh.working_weekends)) fresh.working_weekends = [];
+    fresh.working_weekends = fresh.working_weekends.filter(function(item){return item!==date});
+    return fresh;
+  });
+  if (!acceptWrite('blackout','blackout',r)) { await recoverWriteFailure([r], 'Working weekend'); return; }
   localStorage.setItem(CACHE_KEY, JSON.stringify(S));
   renderAll();
   showToast('Working weekend removed','ok');
@@ -1054,8 +1206,18 @@ async function addHoliday() {
   S.holidays.holidays.push(entry);
   S.holidays.holidays.sort(function(a,b){return a.date.localeCompare(b.date)});
   showToast('Saving...','ok');
-  const r = await GH.writeFile('holidays.json', S.holidays, S.shas.holidays, 'Holiday added: '+date+' - '+label+' (mobile)');
-  if (r.ok) S.shas.holidays = r.sha;
+  const r = await GH.writeFile('holidays.json', S.holidays, S.shas.holidays, 'Holiday added: '+date+' - '+label+' (mobile)', function(fresh){
+    if (!Array.isArray(fresh.holidays)) fresh.holidays = [];
+    const current = fresh.holidays.find(function(h){return h.date===date});
+    if (current) {
+      if (sameEntry(current, entry, ['date','label','confirmed','moon_dependent'])) return fresh;
+      throw new Error('date '+date+' already has a different holiday');
+    }
+    fresh.holidays.push(cloneJson(entry));
+    fresh.holidays.sort(function(a,b){return a.date.localeCompare(b.date)});
+    return fresh;
+  });
+  if (!acceptWrite('holidays','holidays',r)) { await recoverWriteFailure([r], 'Holiday'); return; }
   localStorage.setItem(CACHE_KEY, JSON.stringify(S));
   renderAll();
   document.getElementById('hol-date').value='';
@@ -1069,8 +1231,14 @@ async function confirmHoliday(date) {
   if (!h) return;
   h.confirmed = true;
   showToast('Saving...','ok');
-  const r = await GH.writeFile('holidays.json', S.holidays, S.shas.holidays, 'Holiday confirmed: '+date+' (mobile)');
-  if (r.ok) S.shas.holidays = r.sha;
+  const r = await GH.writeFile('holidays.json', S.holidays, S.shas.holidays, 'Holiday confirmed: '+date+' (mobile)', function(fresh){
+    if (!Array.isArray(fresh.holidays)) throw new Error('holiday list changed shape');
+    const current = fresh.holidays.find(function(item){return item.date===date});
+    if (!current) throw new Error('holiday '+date+' was removed elsewhere');
+    current.confirmed = true;
+    return fresh;
+  });
+  if (!acceptWrite('holidays','holidays',r)) { await recoverWriteFailure([r], 'Holiday confirmation'); return; }
   localStorage.setItem(CACHE_KEY, JSON.stringify(S));
   renderAll();
   showToast('Holiday confirmed','ok');
@@ -1080,9 +1248,16 @@ async function toggleHoliday(date) {
   const h = (S.holidays.holidays||[]).find(function(x){return x.date===date});
   if (!h) return;
   h.disabled = !h.disabled;
+  const desiredDisabled = h.disabled;
   showToast('Saving...','ok');
-  const r = await GH.writeFile('holidays.json', S.holidays, S.shas.holidays, 'Holiday '+(h.disabled?'disabled':'enabled')+': '+date+' (mobile)');
-  if (r.ok) S.shas.holidays = r.sha;
+  const r = await GH.writeFile('holidays.json', S.holidays, S.shas.holidays, 'Holiday '+(desiredDisabled?'disabled':'enabled')+': '+date+' (mobile)', function(fresh){
+    if (!Array.isArray(fresh.holidays)) throw new Error('holiday list changed shape');
+    const current = fresh.holidays.find(function(item){return item.date===date});
+    if (!current) throw new Error('holiday '+date+' was removed elsewhere');
+    current.disabled = desiredDisabled;
+    return fresh;
+  });
+  if (!acceptWrite('holidays','holidays',r)) { await recoverWriteFailure([r], 'Holiday update'); return; }
   localStorage.setItem(CACHE_KEY, JSON.stringify(S));
   renderAll();
   showToast(h.disabled?'Holiday disabled':'Holiday enabled','ok');
@@ -1092,19 +1267,36 @@ async function shiftHoliday(date, offset) {
   const target = (S.holidays.holidays||[]).find(function(x){return x.date===date});
   if (!target) return;
   const groupPrefix = getLinkedPrefix(target.label||'');
+  const shiftPlan = [];
   (S.holidays.holidays||[]).forEach(function(h){
     const shouldShift = (h.date===date) || (groupPrefix && (h.label||'').startsWith(groupPrefix));
     if (shouldShift) {
+      const from = h.date;
       const d = new Date(h.date+'T12:00:00');
       d.setDate(d.getDate()+offset);
       h.date = d.toISOString().slice(0,10);
       if (!h.moon_dependent) h.confirmed = true;
+      shiftPlan.push({label:h.label, from:from, to:h.date, confirm:!h.moon_dependent});
     }
   });
   S.holidays.holidays.sort(function(a,b){return a.date.localeCompare(b.date)});
   showToast('Saving...','ok');
-  const r = await GH.writeFile('holidays.json', S.holidays, S.shas.holidays, 'Holiday shifted: '+target.label+' by '+(offset>0?'+':'')+offset+' day (mobile)');
-  if (r.ok) S.shas.holidays = r.sha;
+  const r = await GH.writeFile('holidays.json', S.holidays, S.shas.holidays, 'Holiday shifted: '+target.label+' by '+(offset>0?'+':'')+offset+' day (mobile)', function(fresh){
+    if (!Array.isArray(fresh.holidays)) throw new Error('holiday list changed shape');
+    shiftPlan.forEach(function(plan){
+      const source = fresh.holidays.find(function(item){return item.date===plan.from && item.label===plan.label});
+      if (!source) {
+        const alreadyApplied = fresh.holidays.find(function(item){return item.date===plan.to && item.label===plan.label});
+        if (alreadyApplied) return;
+        throw new Error('holiday '+plan.label+' changed elsewhere');
+      }
+      source.date = plan.to;
+      if (plan.confirm) source.confirmed = true;
+    });
+    fresh.holidays.sort(function(a,b){return a.date.localeCompare(b.date)});
+    return fresh;
+  });
+  if (!acceptWrite('holidays','holidays',r)) { await recoverWriteFailure([r], 'Holiday shift'); return; }
   localStorage.setItem(CACHE_KEY, JSON.stringify(S));
   renderAll();
   showToast('Holiday shifted','ok');
@@ -1123,10 +1315,18 @@ async function saveBalance() {
   lb.earned.remaining=num(document.getElementById('set-er').value);
   lb.earned.carry_forward_limit=parseInt(document.getElementById('set-cfl').value)||5;
   lb.earned.carried_forward=num(document.getElementById('set-cf').value);
+  const desiredBalance = cloneJson(lb);
 
   showToast('Saving...','ok');
-  const r = await GH.writeFile('leave_balance.json', lb, S.shas.balance, 'Update leave balance (mobile)');
-  if (r.ok) S.shas.balance = r.sha;
+  const r = await GH.writeFile('leave_balance.json', lb, S.shas.balance, 'Update leave balance (mobile)', function(fresh){
+    fresh.year = desiredBalance.year;
+    ['casual','sick','earned'].forEach(function(key){
+      if (!fresh[key] || typeof fresh[key] !== 'object') fresh[key] = {};
+      Object.keys(desiredBalance[key]||{}).forEach(function(field){fresh[key][field]=desiredBalance[key][field]});
+    });
+    return fresh;
+  });
+  if (!acceptWrite('balance','balance',r)) { await recoverWriteFailure([r], 'Leave balance'); return; }
   localStorage.setItem(CACHE_KEY, JSON.stringify(S));
   renderAll();
   showToast(r.ok?'Leave balance saved':'Save failed','ok');
@@ -1139,10 +1339,16 @@ async function saveNotifPrefs() {
     np.preferences[key] = document.getElementById('np-'+key).checked;
   });
   np.admin_email = document.getElementById('set-admin-email').value.trim();
+  const desiredPrefs = cloneJson(np);
 
   showToast('Saving...','ok');
-  const r = await GH.writeFile('notification_prefs.json', np, S.shas.notifPrefs, 'Update notification prefs (mobile)');
-  if (r.ok) { S.notifPrefs = np; S.shas.notifPrefs = r.sha; }
+  const r = await GH.writeFile('notification_prefs.json', np, S.shas.notifPrefs, 'Update notification prefs (mobile)', function(fresh){
+    if (!fresh.preferences || typeof fresh.preferences !== 'object') fresh.preferences = {};
+    Object.keys(desiredPrefs.preferences).forEach(function(key){fresh.preferences[key]=desiredPrefs.preferences[key]});
+    fresh.admin_email = desiredPrefs.admin_email;
+    return fresh;
+  });
+  if (!acceptWrite('notifPrefs','notifPrefs',r)) { await recoverWriteFailure([r], 'Notification settings'); return; }
   localStorage.setItem(CACHE_KEY, JSON.stringify(S));
   showToast(r.ok?'Notification settings saved':'Save failed','ok');
 }
