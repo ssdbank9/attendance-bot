@@ -310,6 +310,30 @@ python -c "import requests, selenium, flask, hijri_converter; print('dependencie
 
 That is expected after 60 minutes, tab/session closure, explicit Clear Token/Disconnect, or migration from the older persistent-storage version. Enter a new short-lived classic PAT with only `repo` and `workflow` scope. Never paste the PAT into logs, issues, source files, or chat.
 
+### Deadman Check emailed "all jobs have failed"
+
+Open the run and read its annotation before assuming attendance was missed. A
+failure means an alert was genuinely due and could **not** be delivered, so the
+annotation names both facts, for example:
+
+`Time-In is MISSING for Wednesday 2026-08-26 AND this deadman could not notify you: NTFY_TOPIC is not set.`
+
+Two distinct causes, with different responses:
+
+- **`NTFY_TOPIC` is not set.** The alert channel does not exist, so a real
+  missing-attendance day cannot reach the phone. Add the secret under Settings
+  > Secrets and variables > Actions. Until then the check still evaluates
+  correctly, but it has no way to tell anyone.
+- **The ntfy send failed.** The channel is configured but unreachable; check the
+  topic value and `NTFY_SERVER`.
+
+A run that decided no alert was needed - holiday, weekend, paused, or
+attendance already recorded - stays green even with an unusable channel, and
+reports it as a warning annotation instead. Earlier behaviour failed those runs
+too, which generated a failure email every weekday, including on public
+holidays. If a green run carries an "Alert channel unusable" warning, the check
+worked and simply had nothing to send.
+
 ## Rollback and recovery
 
 Before a code rollback, preserve local state:

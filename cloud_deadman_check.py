@@ -33,12 +33,16 @@ Stdlib only - no pip install on the runner.
 
     python cloud_deadman_check.py [--dry-run]
 
-Exit codes matter here. A deadman that cannot send is worse than no deadman:
-it reports success every quiet morning and only reveals itself on the one
-morning it was meant to speak. So a real run exits non-zero whenever the alert
-channel is unusable - even on days no alert was due. That turns a silent
-misconfiguration into a red X plus GitHub's own failed-workflow email, a backup
-channel independent of ntfy. Dry runs only warn, so manual checks stay green.
+Exit codes matter here. A real run exits non-zero when an alert was genuinely
+due and could not be delivered - that is the case worth a red X and GitHub's
+own failed-workflow email, a backup channel independent of ntfy. On a quiet day
+(holiday, weekend, paused, or attendance already recorded) an unusable channel
+is reported as a warning annotation instead, and the run stays green.
+
+That split is deliberate. Failing every run with an unconfigured channel emails
+the user daily, including on holidays where the check correctly said nothing -
+the same daily false alarm that made the original dead man's switch worthless.
+A failure here should mean "something needed saying and could not be sent".
 
 What that check does and does not cover: it confirms a topic is set and that
 the composed publish URL is a well-formed http(s) address. It deliberately does
@@ -327,27 +331,36 @@ def main():
         annotate("warning", f"Pause state: {note}")
         summary(f"Pause state: {note}")
 
-    # A deadman that cannot send is worse than no deadman: it reports success
-    # every quiet morning and only reveals itself on the one morning it was
-    # supposed to speak. So the channel is checked on every run, not just when
-    # an alert is due, and a real run FAILS when it is unusable - the red X and
-    # GitHub's own failed-workflow email are then the backup channel, entirely
-    # independent of ntfy. Dry runs only warn, so manual checks stay green.
+    # The channel is checked on every run, but only a run that actually needed
+    # to say something FAILS when it cannot.
+    #
+    # An earlier version failed every run with an unusable channel, on the
+    # reasoning that a deadman which cannot send should reveal itself before
+    # the morning it matters. In practice that emailed a workflow failure every
+    # weekday - including 2026-08-26, a public holiday where the check had
+    # correctly decided to stay quiet - which is precisely the daily false
+    # alarm that made the original dead man's switch worthless and trained its
+    # reader to ignore it. A red X now means "something needed saying and could
+    # not be sent", which is actionable; an unconfigured channel on a quiet day
+    # is a warning on the run page instead, visible without generating mail.
     problem = channel_problem()
     if problem:
-        # Lead with the attendance fact when there is one. The annotation is
-        # the surface people actually read, so it must not bury today being
-        # unmarked under a configuration complaint.
         if alert_needed:
+            # Lead with the attendance fact. The annotation is the surface
+            # people actually read, so it must not bury today being unmarked
+            # under a configuration complaint.
             note = (f"Time-In is MISSING for {day_name} {day} AND this deadman "
                     f"could not notify you: {problem}.")
+            annotate("warning" if dry_run else "error", note)
+            summary(f"**Alert channel BROKEN:** {note}")
+            if not dry_run:
+                return 1
         else:
-            note = (f"{problem}, so this deadman cannot notify anyone. "
-                    "Add it under Settings > Secrets and variables > Actions.")
-        annotate("warning" if dry_run else "error", note)
-        summary(f"**Alert channel BROKEN:** {note}")
-        if not dry_run:
-            return 1
+            note = (f"{problem}, so no alert could be sent if one were due. No "
+                    f"alert was needed today ({reason}). Add it under Settings "
+                    "> Secrets and variables > Actions.")
+            annotate("warning", note)
+            summary(f"**Alert channel unusable:** {note}")
 
     if not alert_needed:
         return 0
