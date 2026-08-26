@@ -1,11 +1,10 @@
 {
   "timein": {
-    "date": "2026-08-25",
-    "status": "success",
-    "message": "Time-In marked at 08:51:55",
-    "timestamp": "2026-08-25 08:51:55",
-    "action_origin": "bot",
-    "action_time": "08:51:55"
+    "date": "2026-08-26",
+    "status": "skipped",
+    "message": "Holiday: Eid Milad-un-Nabi",
+    "timestamp": "2026-08-26 09:06:01",
+    "action_origin": "bot"
   },
   "timeout": {
     "date": "2026-08-25",
