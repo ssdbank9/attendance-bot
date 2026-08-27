@@ -1,16 +1,18 @@
 {
   "timein": {
-    "date": "2026-08-26",
-    "status": "skipped",
-    "message": "Holiday: Eid Milad-un-Nabi",
-    "timestamp": "2026-08-26 09:06:01",
-    "action_origin": "bot"
+    "date": "2026-08-27",
+    "status": "success",
+    "message": "Time-In was already present before this bot acted (portal reported 08:53:00)",
+    "timestamp": "2026-08-27 09:11:47",
+    "action_origin": "preexisting",
+    "observed_time": "08:53:00"
   },
   "timeout": {
-    "date": "2026-08-26",
-    "status": "skipped",
-    "message": "Cannot Time-Out: no Time-In recorded today 26-Aug-2026",
-    "timestamp": "2026-08-26 23:17:09",
-    "action_origin": "bot"
+    "date": "2026-08-27",
+    "status": "success",
+    "message": "Time-Out was already present before this bot acted (portal reported 21:09:00)",
+    "timestamp": "2026-08-27 21:39:02",
+    "action_origin": "preexisting",
+    "observed_time": "21:09:00"
   }
 }
