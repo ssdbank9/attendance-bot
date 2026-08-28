@@ -291,6 +291,36 @@ def get_active_blackouts():
     return dates, ranges
 
 
+def _clock_row():
+    """Read-only line showing whether the laptop clock is on Pakistan time.
+
+    Deliberately information, not a control. A timezone PICKER would be a
+    footgun: the attendance window is fixed by AKU, so the only correct choice
+    is always Pakistan and any other choice silently marks you at the wrong
+    hour. What the user actually needs is to SEE a drift.
+
+    It still matters after the one-shot was made offset-aware, because Windows
+    Task Scheduler fires the 08:45 / 20:00 base triggers on host wall-clock by
+    design - so a drifted laptop starts the bot at the wrong Pakistan moment,
+    even though the randomized alarm it then sets is correct."""
+    local = datetime.now().astimezone()
+    local_off = local.utcoffset() or timedelta(0)
+    pkt_off = timedelta(hours=5)
+    hours = local_off.total_seconds() / 3600
+    label = f"UTC{hours:+g}".replace("+0", "+0")
+    if local_off == pkt_off:
+        return (
+            f'<div class="clock-ok">Laptop clock: Pakistan time ({label}) &mdash; correct</div>'
+        )
+    diff = (local_off - pkt_off).total_seconds() / 3600
+    return (
+        f'<div class="clock-warn"><b>Laptop clock is {label}, not Pakistan time (UTC+5).</b> '
+        f'It is {abs(diff):g}h {"ahead of" if diff > 0 else "behind"} Pakistan, so the daily '
+        f'8:45 AM / 8:00 PM start fires at the wrong Pakistan moment. Set Windows '
+        f'back to (UTC+05:00) Islamabad, Karachi.</div>'
+    )
+
+
 def _valid_date(value):
     """True only for a real YYYY-MM-DD date.
 
@@ -1330,6 +1360,7 @@ def dashboard():
         lb_carry_limit=lb.get('earned',{}).get('carry_forward_limit',5),
         lb_carried=lb.get('earned',{}).get('carried_forward',0),
         paused_banner='<div class="paused-banner">BOT PAUSED &mdash; No attendance will be marked</div>' if is_paused else "",
+        clock_row=_clock_row(),
     )
 DASHBOARD_HTML = """<!DOCTYPE html>
 <html lang="en"><head>
@@ -1361,6 +1392,8 @@ body{{background:var(--bg);color:var(--text);font-family:-apple-system,system-ui
 .status-box .meta{{font-size:.75rem;color:var(--text2)}}
 .status-box.ok .time{{color:var(--ok)}}.status-box.done .time{{color:var(--ok)}}.status-box.done{{background:var(--ok-bg)}}.status-box.fail .time{{color:var(--fail)}}.status-box.skip .time{{color:var(--skip)}}.status-box.none .time{{color:var(--text2)}}
 .quick-actions{{display:grid;grid-template-columns:1fr 1fr;gap:.5rem}}
+.clock-ok{{margin-top:.6rem;font-size:.7rem;color:var(--text2);text-align:center}}
+.clock-warn{{margin-top:.6rem;font-size:.75rem;line-height:1.4;color:#7a2e00;background:#fff4e5;border:1px solid #ffb870;border-radius:8px;padding:.55rem .7rem}}
 .btn{{display:inline-flex;align-items:center;justify-content:center;padding:.6rem .8rem;border-radius:8px;background:var(--accent);color:#fff;text-decoration:none;font-size:.85rem;font-weight:600;border:none;cursor:pointer;text-align:center}}
 .btn.outline{{background:transparent;color:var(--accent);border:1.5px solid var(--accent)}}
 .btn.danger{{background:var(--fail);color:#fff}}.btn.sm{{padding:.35rem .6rem;font-size:.75rem;border-radius:6px}}.btn.full{{width:100%}}.btn.disabled{{opacity:.4;pointer-events:none;cursor:default}}
@@ -1424,7 +1457,7 @@ body{{background:var(--bg);color:var(--text);font-family:-apple-system,system-ui
       <div class="status-grid">
         <div class="status-box {ti_class}"><div class="label">Time-In</div><div class="time">{ti_time}</div><div class="meta">{ti_meta}</div></div>
         <div class="status-box {to_class}"><div class="label">Time-Out</div><div class="time">{to_time}</div><div class="meta">{to_meta}</div></div>
-      </div></div>
+      </div>{clock_row}</div>
     <div class="card"><div class="card-title">Today's Actions</div>
       <div class="quick-actions">
         <a class="btn full {ti_btn}" style="background:var(--ok)" href="/action/timein-now" onclick="return confirm('Run Time-In now?')">Time In Now</a>
