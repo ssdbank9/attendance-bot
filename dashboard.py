@@ -29,6 +29,15 @@ silence(Path(__file__).parent / "timein_logs" / "dashboard_stdout.log")
 
 BASE_DIR = Path(__file__).parent
 CONFIG_FILE = BASE_DIR / "config.json"
+
+def _system_python():
+    """System python.exe for launching the bot (needs selenium/requests)."""
+    if sys.prefix != sys.base_prefix:
+        base = Path(sys.base_prefix) / "python.exe"
+        if base.exists():
+            return str(base)
+    return sys.executable
+
 STATUS_FILE = BASE_DIR / "timein_status.json"
 HOLIDAYS_FILE = BASE_DIR / "holidays.json"
 BLACKOUT_FILE = BASE_DIR / "blackout.json"
@@ -282,6 +291,61 @@ def get_active_blackouts():
     return dates, ranges
 
 
+def _valid_date(value):
+    """True only for a real YYYY-MM-DD date.
+
+    Unvalidated dates were written straight into holidays.json / blackout.json,
+    and the render helpers strptime() them unconditionally - so a single bad
+    value made the WHOLE dashboard return 500 until the file was hand-edited,
+    including the Pause button."""
+    try:
+        datetime.strptime(value, "%Y-%m-%d")
+        return True
+    except (ValueError, TypeError):
+        return False
+
+
+def _run_bot_now(mode, wait_seconds=45):
+    """Run the bot and report what ACTUALLY happened.
+
+    Returns (ok, message, died_silently). ok is True/False, or None while it is
+    still running. died_silently is True only when the child could not report
+    for itself, so the caller must send the push instead of double-notifying.
+
+    Fire-and-forget Popen is what let this page cheerfully answer
+    "running now..." while the child died on import - seven times across
+    2026-08-27/28, with nothing in any log. Waiting for the exit code and then
+    reading the status file back is the only way this page can tell the truth.
+    """
+    label = "Time-In" if mode == "timein" else "Time-Out"
+    try:
+        proc = subprocess.run(
+            [_system_python(), str(BASE_DIR / "timein_bot.py"), mode, "--now"],
+            capture_output=True, text=True, timeout=wait_seconds,
+            creationflags=subprocess.CREATE_NO_WINDOW,
+        )
+    except subprocess.TimeoutExpired:
+        return None, f"{label} is still running - refresh in a moment", False
+    except Exception as exc:
+        return False, f"{label} could not start: {type(exc).__name__}", True
+
+    if proc.returncode != 0:
+        tail = (proc.stderr or proc.stdout or "").strip().splitlines()
+        detail = tail[-1][:160] if tail else f"exit code {proc.returncode}"
+        return False, f"{label} FAILED to run: {detail}", True
+
+    # Exit code 0 only proves the process ran. The status file says what it did.
+    today = pk_now().strftime("%Y-%m-%d")
+    rec = load_json(STATUS_FILE).get(mode, {})
+    if rec.get("date") == today and rec.get("status") == "success":
+        when = rec.get("action_time") or rec.get("observed_time") or "?"
+        return True, f"{label} marked at {when}", False
+    if rec.get("date") == today and rec.get("status") in ("failed", "skipped"):
+        return False, rec.get("message") or f"{label} did not complete", False
+    out = (proc.stdout or "").strip().splitlines()
+    return False, (out[-1][:160] if out else f"{label} did not complete"), False
+
+
 def run_manage(script, *args):
     cmd = [sys.executable, str(BASE_DIR / script)] + list(args)
     try:
@@ -347,31 +411,48 @@ def get_linked_prefix(label):
 
 @app.route("/action/skip-tomorrow")
 def action_skip_tomorrow():
-    run_manage("manage_blackout.py", "skip", "tomorrow", "Phone skip")
+    # The result was previously discarded, so a failed save still produced a
+    # "Skip Confirmed" push - and the bot would then mark attendance on a day
+    # the user believed was blocked off.
+    ok, out = run_manage("manage_blackout.py", "skip", "tomorrow", "Phone skip")
+    if not ok:
+        return redirect(url_for("dashboard",
+                                msg=f"Could NOT skip tomorrow: {out or 'the change was not saved'}"))
     _sync_blackout_to_cloud()
     from notify import notify
     notify("Tomorrow skipped from dashboard.", title="Skip Confirmed", tags="fast_forward")
-    return redirect(url_for("dashboard"))
+    return redirect(url_for("dashboard", msg="Tomorrow skipped"))
 
 @app.route("/action/cancel-skip-tomorrow")
 def action_cancel_skip_tomorrow():
-    run_manage("manage_blackout.py", "cancel", "tomorrow")
+    ok, out = run_manage("manage_blackout.py", "cancel", "tomorrow")
+    if not ok:
+        return redirect(url_for("dashboard",
+                                msg=f"Could NOT un-skip tomorrow: {out or 'the change was not saved'}"))
     _sync_blackout_to_cloud()
     from notify import notify
     notify("Tomorrow un-skipped from dashboard.", title="Skip Cancelled", tags="white_check_mark")
-    return redirect(url_for("dashboard"))
+    return redirect(url_for("dashboard", msg="Tomorrow un-skipped"))
 
 @app.route("/action/skip-date/<date>")
 def action_skip_date(date):
-    run_manage("manage_blackout.py", "skip", date, "Dashboard skip")
+    if not _valid_date(date):
+        return redirect(url_for("dashboard", msg=f"Not a valid date: {date}"))
+    ok, out = run_manage("manage_blackout.py", "skip", date, "Dashboard skip")
+    if not ok:
+        return redirect(url_for("dashboard", msg=f"Could NOT skip {date}: {out or 'not saved'}"))
     _sync_blackout_to_cloud()
-    return redirect(url_for("dashboard"))
+    return redirect(url_for("dashboard", msg=f"{date} skipped"))
 
 @app.route("/action/cancel-skip/<date>")
 def action_cancel_skip(date):
-    run_manage("manage_blackout.py", "cancel", date)
+    if not _valid_date(date):
+        return redirect(url_for("dashboard", msg=f"Not a valid date: {date}"))
+    ok, out = run_manage("manage_blackout.py", "cancel", date)
+    if not ok:
+        return redirect(url_for("dashboard", msg=f"Could NOT un-skip {date}: {out or 'not saved'}"))
     _sync_blackout_to_cloud()
-    return redirect(url_for("dashboard"))
+    return redirect(url_for("dashboard", msg=f"{date} un-skipped"))
 
 @app.route("/action/confirm-holiday/<date>")
 def action_confirm_holiday(date):
@@ -491,6 +572,11 @@ def action_add_holiday():
     moon = request.form.get("hol_moon") == "on"
     if not date or not label:
         return redirect(url_for("dashboard"))
+    # manage_holidays.add_holiday() strptime-validates; this form bypassed it
+    # entirely, and render_holidays() then strptime()s unconditionally - one
+    # bad value here 500s the whole dashboard.
+    if not _valid_date(date):
+        return redirect(url_for("dashboard", msg=f"Not a valid date: {date}"))
     data = load_json(HOLIDAYS_FILE)
     if not data.get("holidays"):
         data["holidays"] = []
@@ -526,6 +612,8 @@ def action_toggle_holiday(date):
 
 @app.route("/action/add-working-weekend/<date>")
 def action_add_working_weekend(date):
+    if not _valid_date(date):
+        return redirect(url_for("dashboard", msg=f"Not a valid date: {date}"))
     data = load_json(BLACKOUT_FILE)
     ww = data.get("working_weekends", [])
     if date not in ww:
@@ -554,6 +642,8 @@ def action_remove_working_weekend(date):
 
 @app.route("/action/mark-leave/<date>")
 def action_mark_leave(date):
+    if not _valid_date(date):
+        return redirect(url_for("dashboard", msg=f"Not a valid date: {date}"))
     leave_type = request.args.get("type", "casual")
     days = float(request.args.get("days", "1"))
     if days not in (0.5, 1):
@@ -662,6 +752,8 @@ def action_add_leave():
         return redirect(url_for("dashboard"))
     if not end:
         end = start
+    if not _valid_date(start) or not _valid_date(end):
+        return redirect(url_for("dashboard", msg="Leave dates must be real dates (YYYY-MM-DD)"))
     if start > end:
         start, end = end, start
     data = load_json(BLACKOUT_FILE)
@@ -752,7 +844,14 @@ def action_push_to_cloud():
 def _sync_pause_state(paused, state_label):
     """Mirror a timestamped pause state to GitHub, retrying once and returning
     the real result so callers cannot report a false success."""
-    from cloud_sync import sync_github_file
+    from cloud_sync import sync_github_file, _gh_config
+
+    # Laptop-only install: there is no cloud to mirror to, so an absent remote
+    # is "not applicable", not a failure. Calling it a failure made the phone
+    # Pause button answer HTTP 502 on every single tap.
+    repo, token = _gh_config()
+    if not repo or not token:
+        return True, "local only (cloud sync not configured)"
 
     payload = {
         "paused": paused,
@@ -857,11 +956,12 @@ def action_timein_now():
         return redirect(url_for("dashboard", msg=f"Time-In already posted today {today_fmt} at {recorded_time}"))
     # A dangling prior-day Time-Out is no longer a hard block here -
     # timein_bot.py auto-completes it before proceeding with today's Time-In.
-    subprocess.Popen([sys.executable, str(BASE_DIR / "timein_bot.py"), "timein", "--now"],
-                     creationflags=subprocess.CREATE_NO_WINDOW)
-    from notify import notify
-    notify("Manual Time-In triggered. Running now...", title="Manual Time-In", tags="arrow_forward")
-    return redirect(url_for("dashboard", msg="Time-In triggered, running now..."))
+    ok, msg, died_silently = _run_bot_now("timein")
+    if died_silently:
+        # The bot could not report for itself, so this page must.
+        from notify import notify
+        notify(msg, title="Manual Time-In Failed", priority="high", tags="rotating_light")
+    return redirect(url_for("dashboard", msg=msg))
 
 @app.route("/action/timeout-now")
 def action_timeout_now():
@@ -882,11 +982,11 @@ def action_timeout_now():
         today_fmt = pk_now().strftime("%d-%b-%Y")
         recorded_time = to.get("action_time") or to.get("observed_time") or "?"
         return redirect(url_for("dashboard", msg=f"Time-Out already posted today {today_fmt} at {recorded_time}"))
-    subprocess.Popen([sys.executable, str(BASE_DIR / "timein_bot.py"), "timeout", "--now"],
-                     creationflags=subprocess.CREATE_NO_WINDOW)
-    from notify import notify
-    notify("Manual Time-Out triggered. Running now...", title="Manual Time-Out", tags="arrow_forward")
-    return redirect(url_for("dashboard", msg="Time-Out triggered, running now..."))
+    ok, msg, died_silently = _run_bot_now("timeout")
+    if died_silently:
+        from notify import notify
+        notify(msg, title="Manual Time-Out Failed", priority="high", tags="rotating_light")
+    return redirect(url_for("dashboard", msg=msg))
 
 @app.route("/action/update-notifications", methods=["POST"])
 def action_update_notifications():
@@ -1875,4 +1975,7 @@ if __name__ == "__main__":
     print(f"LAN access: http://{__import__('notify').get_local_ip()}:{port}")
     if dash.get("tailscale_ip"):
         print(f"Tailscale access: http://{dash['tailscale_ip']}:{port}")
-    app.run(host=host, port=port, debug=False)
+    # threaded=True is Flask's default, but make it explicit: /action/timein-now
+    # now blocks for up to 45s waiting on the bot, and the dashboard must stay
+    # answerable on other requests while it does.
+    app.run(host=host, port=port, debug=False, threaded=True)

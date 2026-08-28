@@ -19,10 +19,19 @@ import logging
 import os
 import subprocess
 from datetime import datetime, timedelta
-from pk_time import now as pk_now
+from pk_time import now as pk_now, PKT
 from pathlib import Path
 
-from notify import notify, notify_status, notify_skip, notify_failure
+# Deliberately ABOVE the third-party imports. Under pythonw.exe stderr is None,
+# so an ImportError from selenium/requests (e.g. the bot launched by an
+# interpreter that lacks them) would write its traceback to nothing: no log
+# line, no status row, no notification. That is exactly how the dashboard's
+# "Time In Now" button failed silently for days. See console_guard.py.
+from console_guard import silence
+silence(Path(__file__).parent / "timein_logs" / "timein_stdout.log")
+
+from notify import (notify, notify_status, notify_skip, notify_failure,
+                    notify_window_missed)
 import attendance_db as db
 
 from selenium import webdriver
@@ -31,10 +40,6 @@ from selenium.webdriver.edge.service import Service as EdgeService
 from selenium.webdriver.common.by import By
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
-
-from console_guard import silence
-silence(Path(__file__).parent / "timein_logs" / "timein_stdout.log")
-# pythonw.exe leaves stdout/stderr as None; see console_guard.py
 
 BASE_DIR = Path(__file__).parent
 LOG_DIR = BASE_DIR / "timein_logs"
@@ -611,7 +616,11 @@ def run_and_record(mode, retry_cfg, catchup_date=None):
 
     msg = f"{label} {detail}"
     log.error(msg)
-    write_status(mode, "failed", msg)
+    # date_str matters: a failed catch-up must be filed against the day it was
+    # catching up, not today. Filing it under today leaves the prior-day dangle
+    # uncleared AND overwrites today's status row, which is what turned a failed
+    # catch-up into a permanent block on every future Time-In.
+    write_status(mode, "failed", msg, date_str=catchup_date)
     notify_failure(mode, retry_cfg["max_attempts"])
     log.info("=== Done (FAILED) ===")
     return False
@@ -627,19 +636,87 @@ def run_and_record(mode, retry_cfg, catchup_date=None):
 ONESHOT_PREFIX = "TimeInBot_OneShot_"
 INLINE_WAIT_LIMIT = 120  # seconds; below this, suspend is not a real risk
 
+# Hard cutoff for acting at all. pick_target_time() clamps its sleep with
+# max(0, ...), so a target that has already passed used to execute IMMEDIATELY:
+# that is how a Time-In landed at 13:03 (2026-08-19) and a Time-Out at 22:03
+# (2026-08-25), times no human arrives or leaves at. Past window_end + this
+# grace the bot marks nothing and tells the user instead. The grace must stay
+# above the fallback buffer (pick_fallback_target_time, 10 min) or the backup
+# trigger could never act at all.
+LATE_GRACE_MINUTES = 15
+
+
+def window_expired(mode):
+    """(expired, cutoff): has this mode window plus grace already closed?"""
+    mc = load_config()[mode]
+    eh, em = parse_time(mc["window_end"])
+    now = pk_now()
+    cutoff = (datetime(now.year, now.month, now.day, eh, em)
+              + timedelta(minutes=LATE_GRACE_MINUTES))
+    return now > cutoff, cutoff
+
+
+def pending_oneshot_time(mode):
+    """Future trigger instant of an already-registered one-shot, or None.
+
+    None means nothing pending worth protecting: no task, no future run time,
+    or the query failed. Callers treat None as free to register."""
+    task = f"{ONESHOT_PREFIX}{mode}"
+    ps = (
+        "$ErrorActionPreference='SilentlyContinue';"
+        f"$i = Get-ScheduledTaskInfo -TaskName '{task}';"
+        "if ($i -and $i.NextRunTime) "
+        "{ $i.NextRunTime.ToString('yyyy-MM-ddTHH:mm:ss') }"
+    )
+    try:
+        r = subprocess.run(
+            ["powershell", "-NoProfile", "-NonInteractive", "-Command", ps],
+            capture_output=True, text=True, timeout=30,
+            creationflags=NO_WINDOW,
+        )
+    except Exception:
+        return None
+    out = (r.stdout or "").strip()
+    try:
+        when = datetime.strptime(out, "%Y-%m-%dT%H:%M:%S")
+    except ValueError:
+        return None
+    return when if when > pk_now() else None
+
 
 def schedule_oneshot(mode, target):
     """Register a wake-capable one-time task at `target`. True if it took."""
     task = f"{ONESHOT_PREFIX}{mode}"
+    # The GitHub fallback always targets a LATER instant than the primary run
+    # (window_end + 0-10 min), and both register under this same task name with
+    # -Force. Without this guard the backup silently pushes an already-pending
+    # alarm later: on 2026-08-27 a 20:22 Time-Out became 21:37, past window_end.
+    # A backup must never delay the thing it is backing up.
+    pending = pending_oneshot_time(mode)
+    if pending and pending <= target:
+        log.info(
+            "One-shot %s already pending at %s (not moving it to %s)",
+            task, pending.strftime("%H:%M:%S"), target.strftime("%H:%M:%S"),
+        )
+        return True
     script = str(Path(__file__).resolve())
     exe = gui_executable()
     # Expires shortly after the target so a stale task cannot re-fire, but with
     # enough slack that a host resuming late still runs it rather than skipping.
     end = target + timedelta(hours=4)
+    # Task Scheduler reads a BARE timestamp as host local time, but target is a
+    # PKT wall-clock value. On a host set to any other timezone the alarm fired
+    # hours off - and because the one-shot runs with --scheduled, which skips
+    # target-picking entirely, pk_time could not recover the error afterwards.
+    # Stamping the offset makes Windows convert it, and matches what the base
+    # task XMLs already do (StartBoundary ...+05:00). Derived from pk_time.PKT
+    # rather than hardcoded, so there is one source of truth for the offset.
+    _tz = target.replace(tzinfo=PKT).strftime("%z")
+    tz = f"{_tz[:3]}:{_tz[3:]}"
     ps = f"""$ErrorActionPreference = 'Stop'
 $a = New-ScheduledTaskAction -Execute '{exe}' -Argument '"{script}" {mode} --scheduled' -WorkingDirectory '{BASE_DIR}'
-$t = New-ScheduledTaskTrigger -Once -At '{target:%Y-%m-%dT%H:%M:%S}'
-$t.EndBoundary = '{end:%Y-%m-%dT%H:%M:%S}'
+$t = New-ScheduledTaskTrigger -Once -At ([datetimeoffset]'{target:%Y-%m-%dT%H:%M:%S}{tz}').LocalDateTime
+$t.EndBoundary = '{end:%Y-%m-%dT%H:%M:%S}{tz}'
 $s = New-ScheduledTaskSettingsSet -WakeToRun -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -StartWhenAvailable -ExecutionTimeLimit (New-TimeSpan -Minutes 30) -DeleteExpiredTaskAfter (New-TimeSpan -Minutes 5)
 $s.Priority = 4
 $s.Hidden = $true
@@ -708,6 +785,15 @@ def main():
             print(msg)
         return
 
+    # should_run_today() must come FIRST. On a holiday, weekend, leave day or
+    # while paused, the timeout pre-check below would otherwise file a false
+    # "no Time-In recorded today" against that date and never call notify_skip
+    # - which is what put bogus "Cannot Time-Out" rows on 2026-08-23 (a Sunday)
+    # and 2026-08-26 (Eid).
+    if not now_flag and not should_run_today(mode):
+        log.info("=== Exiting (skipped) ===")
+        return
+
     catchup_date = None
     if mode == "timeout":
         catchup_date = pending_prior_day_timein()
@@ -724,10 +810,6 @@ def main():
             log.info("Completing pending Time-Out for %s before proceeding", missed_fmt)
 
     if not now_flag:
-        if not should_run_today(mode):
-            log.info("=== Exiting (skipped) ===")
-            return
-
         if not scheduled_flag:
             if fallback_flag:
                 # Fallback trigger (GitHub Actions self-hosted runner): runs
@@ -774,7 +856,20 @@ def main():
                 write_status(mode, "failed", msg)
                 return
 
-    run_and_record(mode, retry_cfg)
+    # A target that has already passed would otherwise be acted on immediately,
+    # however late (max(0, ...) in pick_target_time). Manual --now is exempt:
+    # an explicit tap means the user wants it marked regardless of the clock.
+    if not now_flag:
+        expired, cutoff = window_expired(mode)
+        if expired:
+            msg = (f"{label} window closed at {cutoff:%H:%M} - not marking at "
+                   f"{pk_now():%H:%M}")
+            log.info("=== %s ===", msg)
+            write_status(mode, "skipped", msg)
+            notify_window_missed(mode, cutoff)
+            return
+
+    run_and_record(mode, retry_cfg, catchup_date=catchup_date)
 
 
 if __name__ == "__main__":

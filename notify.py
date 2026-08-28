@@ -163,6 +163,31 @@ def notify_skip(mode, reason):
     )
 
 
+def notify_window_missed(mode, cutoff):
+    """The window closed before the bot could act, so it marked nothing.
+
+    Deliberately loud and actionable: the whole point of refusing to mark a
+    Time-In at 13:03 is that the user gets to decide instead, so the push
+    carries a one-tap button that marks it anyway."""
+    if not pref_enabled("failure"):
+        return
+    label = "Time-In" if mode == "timein" else "Time-Out"
+    dashboard = get_dashboard_url()
+    action_url = f"{dashboard}/action/timein-now" if mode == "timein" else f"{dashboard}/action/timeout-now"
+    notify(
+        f"{label} NOT marked - the window closed at {cutoff:%H:%M} "
+        f"(desktop was asleep or off). Tap to mark it now.",
+        title=f"{label} Window Missed",
+        priority="high",
+        tags="hourglass_flowing_sand",
+        click=f"{dashboard}/?tab=home",
+        actions=(
+            f"view, Mark {label} Now, {action_url}; "
+            f"view, Dashboard, {dashboard}/?tab=home"
+        ),
+    )
+
+
 def notify_failure(mode, attempts):
     if not pref_enabled("failure"):
         return
@@ -238,9 +263,12 @@ def notify_tomorrow_holiday(day_name, label, holiday_date=None):
     dashboard = get_dashboard_url()
     actions = f"view, View Holidays, {dashboard}/?tab=holidays"
     if holiday_date:
+        # Confirm / cancel, as asked for: the date set in the app is what the
+        # bot will act on, and this is the last chance to overrule it before
+        # tomorrow. "Not a holiday" flips the disabled flag so the bot runs.
         actions = (
-            f"view, Disable, {dashboard}/action/toggle-holiday/{holiday_date}; "
-            f"view, +1 Day, {dashboard}/action/shift-holiday/{holiday_date}/1; "
+            f"view, Confirm, {dashboard}/action/confirm-holiday/{holiday_date}; "
+            f"view, Not a holiday, {dashboard}/action/toggle-holiday/{holiday_date}; "
             f"view, Holidays, {dashboard}/?tab=holidays"
         )
     notify(

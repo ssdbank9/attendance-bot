@@ -108,7 +108,14 @@ def show_holiday_popup(upcoming):
     def do_save(shift=0):
         for h, var in entries:
             if not var.get():
-                data["holidays"] = [x for x in data["holidays"] if x["date"] != h["date"]]
+                # Match on label too. populate_year() emits genuine same-date
+                # pairs (e.g. "Eid Milad-un-Nabi" and "12 Rabi ul-Awal"), so
+                # filtering by date alone silently deleted the OTHER holiday
+                # and the bot then marked attendance on a real public holiday.
+                data["holidays"] = [
+                    x for x in data["holidays"]
+                    if not (x["date"] == h["date"] and x["label"] == h["label"])
+                ]
             elif shift != 0:
                 old = datetime.strptime(h["date"], "%Y-%m-%d")
                 new_str = (old + timedelta(days=shift)).strftime("%Y-%m-%d")
@@ -118,7 +125,7 @@ def show_holiday_popup(upcoming):
                         x["confirmed"] = True
             else:
                 for x in data["holidays"]:
-                    if x["date"] == h["date"]:
+                    if x["date"] == h["date"] and x["label"] == h["label"]:
                         x["confirmed"] = True
         data["holidays"].sort(key=lambda x: x["date"])
         save_json(HOLIDAYS_FILE, data)
@@ -167,9 +174,13 @@ def run_holiday_check():
 
     upcoming_3d = get_holidays_in_days(3)
     if upcoming_3d:
-        show_holiday_popup(upcoming_3d)
+        # Notify FIRST. show_holiday_popup() calls root.mainloop(), which blocks
+        # until someone clicks it - and this task has no ExecutionTimeLimit. With
+        # the notify after the popup, an unattended desktop meant the phone alert
+        # (the only channel that reaches an absent user) was never sent at all.
         for h in upcoming_3d:
             notify_holiday_reminder(h["label"], h["date"], days_until=3, moon_dependent=h.get("moon_dependent", False))
+        show_holiday_popup(upcoming_3d)
 
 
 def main():
