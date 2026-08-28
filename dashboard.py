@@ -512,11 +512,25 @@ def action_shift_holiday(date, direction):
     if not target:
         return redirect(url_for("dashboard"))
     group_prefix = get_linked_prefix(target.get("label", ""))
+    target_day = datetime.strptime(date, "%Y-%m-%d")
     shifted = []
     for h in data.get("holidays", []):
         should_shift = (h["date"] == date)
         if group_prefix and h.get("label", "").startswith(group_prefix):
-            should_shift = True
+            # Same occurrence only. Matching the label prefix alone swept up
+            # EVERY year: on 2026-08-28 a +1 shift of 2027-03-08 from the phone
+            # also moved 2026 Eid ul-Fitr from 21/22/23 to 22/23/24 March.
+            # Eid and Ashura are multi-day blocks that must move together, but
+            # only within one occurrence - members sit a couple of days apart,
+            # so a week is a generous bound that can never reach another year.
+            try:
+                same_occurrence = abs(
+                    (datetime.strptime(h["date"], "%Y-%m-%d") - target_day).days
+                ) <= 7
+            except ValueError:
+                same_occurrence = False
+            if same_occurrence:
+                should_shift = True
         if should_shift:
             old = datetime.strptime(h["date"], "%Y-%m-%d")
             new_date = (old + timedelta(days=offset)).strftime("%Y-%m-%d")
