@@ -10,6 +10,8 @@ Skips weekends, public holidays (holidays.json), and blackout dates (blackout.js
 Retries on failure. Phone notification via Claude Code push.
 """
 
+import contextlib
+import ctypes
 import json
 import random
 import re
@@ -634,7 +636,13 @@ def run_and_record(mode, retry_cfg, catchup_date=None):
 # (20:32 target -> acted 20:58). Handing the wait to a one-shot task with
 # WakeToRun makes Windows wake the machine at the randomized instant itself.
 ONESHOT_PREFIX = "TimeInBot_OneShot_"
-INLINE_WAIT_LIMIT = 120  # seconds; below this, suspend is not a real risk
+# Waits up to this stay in-process, where keep_awake() can guarantee the host
+# does not suspend. 30 min covers the entire Time-In window (08:45-09:05), so
+# the morning run no longer depends on a WakeToRun one-shot firing correctly
+# on a machine whose firmware only offers S0. Longer waits (Time-Out spans 90
+# min) still hand off to the one-shot, which then holds the host awake itself
+# once it fires.
+INLINE_WAIT_LIMIT = 1800
 
 # Hard cutoff for acting at all. pick_target_time() clamps its sleep with
 # max(0, ...), so a target that has already passed used to execute IMMEDIATELY:
@@ -644,6 +652,64 @@ INLINE_WAIT_LIMIT = 120  # seconds; below this, suspend is not a real risk
 # above the fallback buffer (pick_fallback_target_time, 10 min) or the backup
 # trigger could never act at all.
 LATE_GRACE_MINUTES = 15
+
+# Windows power-request flags. ES_SYSTEM_REQUIRED keeps the SYSTEM awake but
+# deliberately not the display: the bot must stay invisible, and a screen
+# waking itself at 08:47 would announce it. ES_CONTINUOUS makes the request
+# persist until we clear it rather than being a one-shot nudge.
+ES_CONTINUOUS = 0x80000000
+ES_SYSTEM_REQUIRED = 0x00000001
+
+
+@contextlib.contextmanager
+def keep_awake(reason):
+    """Ask Windows not to idle-sleep while the bot is waiting or acting.
+
+    This host has no S3 - only S0 Modern Standby - so it dips into low-power
+    idle many times an hour, and "Sleep after" is already 0 on AC yet the dips
+    still happen (screen-off drives them). A target picked for 08:59 could
+    therefore pass while the machine was suspended, and the bot acted whenever
+    it next resumed: that is how a Time-In landed at 13:03.
+
+    Scope is deliberately narrow. The request is held only while this process
+    is waiting for its target or marking attendance - about twenty minutes a
+    morning - and released in a finally, including on crash. It is NOT a
+    global power-plan change: normal power saving continues the rest of the
+    day, which is the whole point of doing it here instead of in powercfg.
+
+    Cannot wake a sleeping machine - nothing running in-process can. Task
+    Scheduler WakeToRun still owns the initial wake; this only guarantees the
+    host stays up once the bot is running.
+    """
+    held = False
+    try:
+        try:
+            api = ctypes.windll.kernel32.SetThreadExecutionState
+            # Declare the signature: the flags are a DWORD and so is the return.
+            # Left as the ctypes default c_int, 0x80000001 comes back negative,
+            # which makes any bitwise check on the result quietly wrong.
+            api.restype = ctypes.c_uint32
+            api.argtypes = [ctypes.c_uint32]
+            api(ES_CONTINUOUS | ES_SYSTEM_REQUIRED)
+            # The call returns the PREVIOUS state, so read it back to confirm
+            # the request actually stuck rather than trusting a bare non-zero.
+            state = api(ES_CONTINUOUS | ES_SYSTEM_REQUIRED)
+            held = bool(state & ES_SYSTEM_REQUIRED)
+            if held:
+                log.info("Holding host awake: %s", reason)
+            else:
+                log.warning("Could not hold host awake (%s) - continuing anyway", reason)
+        except Exception as e:
+            # Never let a power-request failure stop attendance being marked.
+            log.warning("Power request unavailable (%s) - continuing anyway", e)
+        yield
+    finally:
+        if held:
+            try:
+                ctypes.windll.kernel32.SetThreadExecutionState(ES_CONTINUOUS)
+                log.info("Released host-awake hold - normal power saving resumes")
+            except Exception as e:
+                log.warning("Could not release host-awake hold: %s", e)
 
 
 def window_expired(mode):
@@ -831,7 +897,8 @@ def main():
                 "%s time: %s (sleeping %.1f min)",
                 kind, target.strftime("%H:%M:%S"), sleep_secs / 60,
             )
-            time.sleep(sleep_secs)
+            with keep_awake(f"waiting for {label} at {target:%H:%M:%S}"):
+                time.sleep(sleep_secs)
 
         # Re-check after the sleep in case something else (the other
         # trigger, or Google Script) completed it while we were waiting.
@@ -869,7 +936,8 @@ def main():
             notify_window_missed(mode, cutoff)
             return
 
-    run_and_record(mode, retry_cfg, catchup_date=catchup_date)
+    with keep_awake(f"marking {label}"):
+        run_and_record(mode, retry_cfg, catchup_date=catchup_date)
 
 
 if __name__ == "__main__":
