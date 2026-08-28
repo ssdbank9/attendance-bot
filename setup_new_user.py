@@ -252,7 +252,10 @@ def create_scheduled_tasks():
     repeat = (
         "$t = New-ScheduledTaskTrigger -Daily -At '00:05'\n"
         "$t.Repetition = (New-ScheduledTaskTrigger -Once -At '00:05' "
-        "-RepetitionInterval (New-TimeSpan -Minutes 5) "
+        # 30 min, not 5. health() retries before declaring death, so a probe
+        # landing inside a Modern Standby transition no longer causes a needless
+        # relaunch - which is what most of the old 5-minute wakeups were doing.
+        "-RepetitionInterval (New-TimeSpan -Minutes 30) "
         "-RepetitionDuration (New-TimeSpan -Days 1)).Repetition\n"
         "$logon = New-ScheduledTaskTrigger -AtLogOn"
     )

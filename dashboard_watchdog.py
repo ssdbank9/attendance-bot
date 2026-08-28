@@ -14,6 +14,7 @@ import json
 import logging
 import socket
 import subprocess
+import time
 import sys
 import urllib.error
 import urllib.request
@@ -48,9 +49,9 @@ def load_json(path):
     return {}
 
 
-def health(port):
+def _probe(port):
     """
-    True only if the dashboard actually answers HTTP.
+    One probe. True only if the dashboard actually answers HTTP.
 
     An open socket is not enough: a wedged process keeps the port bound while
     serving nothing, which looks identical to 'down' from the phone. /login is
@@ -72,6 +73,41 @@ def health(port):
         return True, f"healthy (/login returned HTTP {e.code})"
     except Exception as e:
         return False, f"port open but not serving ({type(e).__name__})"
+
+
+def health(port, attempts=2, gap=8):
+    """Probe, and on failure wait and probe again before declaring death.
+
+    One failed probe is not proof the dashboard is gone. This host uses Modern
+    Standby (S0) and dips in and out of low-power idle many times an hour; a
+    probe landing inside that transition times out against a perfectly healthy
+    process. Proven on 2026-08-26: the watchdog declared the dashboard dead at
+    09:06:01, three seconds after resume, and that same process went on to
+    serve requests at 09:06:03 and 09:06:06. The machine was throttled hard
+    enough that the watchdog could not even spawn a thread to enumerate
+    sockets ("can't start new thread").
+
+    Five of six recorded deaths sat within minutes of a standby transition, so
+    a single short retry removes that whole class of needless restart. It also
+    matters more now the check runs every 30 minutes rather than every 5: a
+    false positive used to cost one wasted relaunch, and would now cost a
+    perfectly good dashboard being replaced for no reason."""
+    first_detail = None
+    for attempt in range(1, attempts + 1):
+        ok, detail = _probe(port)
+        if ok:
+            if attempt > 1:
+                log.info(
+                    "Dashboard healthy on probe %s - first probe said %r; "
+                    "treating that as a standby transition, not a dead process",
+                    attempt, first_detail,
+                )
+            return True, detail
+        if first_detail is None:
+            first_detail = detail
+        if attempt < attempts:
+            time.sleep(gap)
+    return False, f"{first_detail} (confirmed over {attempts} probes)"
 
 
 def interpreter():
