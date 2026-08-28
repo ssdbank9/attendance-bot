@@ -6,7 +6,7 @@
     "skip_day": true,
     "failure": true,
     "tomorrow_plan": true,
-    "tomorrow_holiday": false,
+    "tomorrow_holiday": true,
     "holiday_reminder": true,
     "deadman_switch": true,
     "holiday_change": true
