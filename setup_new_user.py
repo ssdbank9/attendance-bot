@@ -6,6 +6,7 @@ Creates config, installs dependencies, sets up scheduled tasks,
 and generates a unique ntfy topic for push notifications.
 """
 
+import importlib.util
 import json
 import os
 import random
@@ -96,6 +97,18 @@ def setup_config():
             "username": portal_user,
             "password": portal_pass,
         },
+        # Laptop-only install: no GitHub account, token or repo is asked for
+        # and none is needed. Empty strings here are what cloud_sync._gh_config()
+        # reads, so every sync call returns (False, "GitHub not configured")
+        # without raising or reaching the network. Fill this in from the
+        # dashboard's Cloud Sync form later if a repo is ever added.
+        "cloud_sync": {
+            "github": {
+                "repo": "",
+                "token": "",
+                "enabled": False,
+            },
+        },
         "paused": False,
     }
 
@@ -133,7 +146,7 @@ def setup_json_files():
 
 def install_dependencies():
     print("\n--- Installing Python Dependencies ---")
-    packages = ["selenium", "flask", "hijri-converter"]
+    packages = ["requests", "selenium", "flask", "hijri-converter"]
     for pkg in packages:
         print(f"  Installing {pkg}...")
         try:
@@ -150,6 +163,17 @@ def install_dependencies():
             print("  Setup aborted. No scheduled tasks were registered.")
             raise SystemExit(1)
     print("  All dependencies installed.")
+    # pip reporting success is not the same as the bot being able to import.
+    # requests in particular is imported lazily inside call_aku_api(), so a
+    # missing wheel does not surface until the first real Time-In - where it
+    # is swallowed by the retry loop and silently demoted to Selenium.
+    missing = [name for name in ("requests", "selenium", "flask", "hijri_converter")
+               if importlib.util.find_spec(name) is None]
+    if missing:
+        print("  [!] Installed, but not importable: " + ", ".join(missing))
+        print("  Setup aborted. No scheduled tasks were registered.")
+        raise SystemExit(1)
+    print("  Verified: requests, selenium, flask, hijri_converter all import.")
 
 
 def populate_holidays():
@@ -309,11 +333,12 @@ def print_ntfy_instructions(config):
        wake-capable one-shot task for its randomized time, so sleep is fine,
        but the machine cannot be shut down.
 
-  NOT SET UP (optional, needs your own GitHub repo)
-     cloud_sync + the 09:20 deadman alert are not configured. Without them
-     everything still works; you just get no warning on a morning this PC
-     never came on. To enable: add a cloud_sync.github block to config.json
-     and set the NTFY_TOPIC repository secret.
+  NOT SET UP - and nothing is missing (this is a laptop-only install)
+     No GitHub account, no token, no self-hosted runner, no cloud backup.
+     config.json ships with cloud_sync disabled, so every sync call returns
+     "GitHub not configured" and does nothing. The one thing you give up is
+     the 09:20 deadman alert - no warning on a morning this laptop never
+     came on. Check the dashboard on those mornings instead.
 
   Your ntfy topic (keep private - anyone with it can read and send
   your notifications): {topic}

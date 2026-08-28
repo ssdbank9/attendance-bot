@@ -44,11 +44,14 @@ Run installation on the authorized AKU attendance computer from this repository 
 
 ```powershell
 Set-Location 'D:\DropBox\Self\Claude\Attendance Management'
-python -m pip install requests
 python setup_new_user.py
 ```
 
-`setup_new_user.py` collects local credentials, creates the initial JSON files, installs `selenium`, `flask`, and `hijri-converter`, populates holidays, registers the scheduled tasks, starts the dashboard watchdog, and prints ntfy instructions. Dependency installation is fail-fast: if any pip command fails, setup exits before registering tasks.
+`setup_new_user.py` collects local credentials, creates the initial JSON files, installs `requests`, `selenium`, `flask`, and `hijri-converter`, populates holidays, registers the scheduled tasks, starts the dashboard watchdog, and prints ntfy instructions. Dependency installation is fail-fast: if any pip command fails, or a package installs but still does not import, setup exits before registering tasks.
+
+Setup never prompts for a GitHub repository or token. It writes `cloud_sync.github` with empty `repo`/`token` and `enabled: false`, which is what `cloud_sync._gh_config()` reads, so every sync call returns `(False, "GitHub not configured")` without raising or touching the network. Cloud sync, the self-hosted runner, and the 09:20 deadman alert are opt-in extras added afterwards from the dashboard's Cloud Sync form.
+
+For a non-technical, laptop-only install, hand the reader `SETUP_FOR_A_FRIEND.md` instead of this file.
 
 During setup:
 
@@ -144,7 +147,6 @@ setup re-populates the current year regardless.
 ### 3. Run setup
 
 ```powershell
-python -m pip install requests
 python setup_new_user.py
 ```
 
@@ -300,7 +302,7 @@ The local state has changed, but the dashboard now reports the remote failure in
 
 ### Setup stops during pip installation
 
-Read the package-specific error, correct network/proxy/Python permissions, and rerun setup. No tasks are registered after a dependency failure. Because `requests` is currently a separately installed prerequisite, also confirm:
+Read the package-specific error, correct network/proxy/Python permissions, and rerun setup. No tasks are registered after a dependency failure. Setup installs `requests`, `selenium`, `flask`, and `hijri-converter` and then verifies each one imports before registering anything. To repeat that check by hand:
 
 ```powershell
 python -c "import requests, selenium, flask, hijri_converter; print('dependencies OK')"
