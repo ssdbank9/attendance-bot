@@ -8,10 +8,11 @@
     "observed_time": "09:06:00"
   },
   "timeout": {
-    "date": "2026-08-30",
-    "status": "skipped",
-    "message": "Weekend (Sunday)",
-    "timestamp": "2026-08-30 20:00:03",
-    "action_origin": "bot"
+    "date": "2026-08-31",
+    "status": "success",
+    "message": "Time-Out marked at 21:03:25",
+    "timestamp": "2026-08-31 21:03:25",
+    "action_origin": "bot",
+    "action_time": "21:03:25"
   }
 }
