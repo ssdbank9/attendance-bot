@@ -1,14 +1,5 @@
 {
   "dates": [],
-  "ranges": [
-    {
-      "start": "2026-09-07",
-      "end": "2026-09-11",
-      "reason": "Earned Leave",
-      "leave_type": "earned",
-      "days": 5,
-      "added": "2026-09-01 14:51"
-    }
-  ],
+  "ranges": [],
   "working_weekends": []
 }
