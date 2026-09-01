@@ -1105,6 +1105,12 @@ def api_analytics():
         return jsonify({"records": []})
     history = load_json(HISTORY_FILE)
     records = history.get("records", {})
+    blackout = load_json(BLACKOUT_FILE)
+    bl_dates = {d["date"]: d for d in blackout.get("dates", [])}
+    bl_ranges = blackout.get("ranges", [])
+    working_weekends = blackout.get("working_weekends", [])
+    holidays_data = load_json(HOLIDAYS_FILE)
+    hol_map = {h["date"]: h.get("label", "Holiday") for h in holidays_data.get("holidays", []) if not h.get("disabled")}
     days = []
     d = datetime.strptime(start, "%Y-%m-%d")
     end_d = datetime.strptime(end, "%Y-%m-%d")
@@ -1113,9 +1119,41 @@ def api_analytics():
         rec = records.get(ds, {})
         ti = rec.get("timein")
         to = rec.get("timeout")
+        hours = compute_hours_worked(ti, to) or 0
+        is_weekend = d.weekday() >= 5
+        is_working_wknd = ds in working_weekends
+        hol_name = hol_map.get(ds)
+        bl_entry = bl_dates.get(ds)
+        bl_range = None
+        for r in bl_ranges:
+            if r.get("start", "") <= ds <= r.get("end", ""):
+                bl_range = r
+                break
         if ti or to:
-            hours = compute_hours_worked(ti, to) or 0
-            days.append({"date": ds, "day": d.strftime("%a"), "timein": ti or "-", "timeout": to or "-", "hours": hours})
+            day_type = "workday"
+            label = ""
+        elif hol_name:
+            day_type = "holiday"
+            label = hol_name
+        elif bl_entry:
+            day_type = "leave"
+            lt = bl_entry.get("leave_type", "")
+            reason = bl_entry.get("reason", "Leave")
+            half = bl_entry.get("days", 1) == 0.5
+            label = reason + (" (Half)" if half else "")
+        elif bl_range:
+            day_type = "leave"
+            label = bl_range.get("reason", "Leave")
+        elif is_weekend and not is_working_wknd:
+            day_type = "weekend"
+            label = "Weekend"
+        elif d > datetime.now():
+            day_type = "future"
+            label = ""
+        else:
+            day_type = "missing"
+            label = "No record"
+        days.append({"date": ds, "day": d.strftime("%a"), "type": day_type, "label": label, "timein": ti or "-", "timeout": to or "-", "hours": hours})
         d += timedelta(days=1)
     return jsonify({"records": days})
 
@@ -1787,19 +1825,30 @@ body{{background:var(--bg);color:var(--text);font-family:-apple-system,system-ui
   }}
   function renderDaily(recs){{
     var worked=recs.filter(function(r){{return r.hours>0}});
+    var leaves=recs.filter(function(r){{return r.type==='leave'}}).length;
+    var holidays=recs.filter(function(r){{return r.type==='holiday'}}).length;
+    var missing=recs.filter(function(r){{return r.type==='missing'}}).length;
     var totalH=worked.reduce(function(a,r){{return a+r.hours}},0);
     var avgH=worked.length?totalH/worked.length:0;
     var totalOver=worked.reduce(function(a,r){{var d=r.hours-TARGET;return a+(d>0?d:0)}},0);
-    document.getElementById('ana-cards').innerHTML='<div class="summary-box"><div class="val">'+worked.length+'</div><div class="lbl">Days Worked</div></div>'
+    var cards='<div class="summary-box"><div class="val">'+worked.length+'</div><div class="lbl">Days Worked</div></div>'
       +'<div class="summary-box"><div class="val">'+avgH.toFixed(1)+'h</div><div class="lbl">Avg Daily</div></div>'
       +'<div class="summary-box"><div class="val">'+totalOver.toFixed(1)+'h</div><div class="lbl">Total Overtime</div></div>';
+    if(leaves>0)cards+='<div class="summary-box"><div class="val" style="color:#b45309">'+leaves+'</div><div class="lbl">Leave Days</div></div>';
+    if(holidays>0)cards+='<div class="summary-box"><div class="val" style="color:var(--primary)">'+holidays+'</div><div class="lbl">Holidays</div></div>';
+    if(missing>0)cards+='<div class="summary-box"><div class="val" style="color:var(--fail)">'+missing+'</div><div class="lbl">Missing</div></div>';
+    document.getElementById('ana-cards').innerHTML=cards;
     document.getElementById('ana-summary').style.display='';
     var maxH=Math.max(TARGET*1.3,Math.max.apply(null,recs.map(function(r){{return r.hours||0}})));
     if(maxH<1)maxH=TARGET*1.3;
     var targetPct=(TARGET/maxH*100);
     var barsHtml='<div class="chart-target" style="bottom:'+targetPct+'%"><span class="chart-target-label">9h10m</span></div>';
     recs.forEach(function(r){{
-      if(r.hours<=0){{barsHtml+='<div class="chart-bar-col"><div class="chart-bar" style="height:0;background:var(--border);min-height:2px;width:100%"></div><div class="chart-lbl">'+r.day+'</div></div>';return}}
+      var tp=r.type||'workday';
+      if(tp==='weekend'||tp==='future')return;
+      if(tp==='holiday'){{barsHtml+='<div class="chart-bar-col"><div class="chart-bar" style="height:3px;background:var(--primary);width:100%"></div><div class="chart-lbl" style="color:var(--primary);font-size:.45rem">H</div></div>';return}}
+      if(tp==='leave'){{barsHtml+='<div class="chart-bar-col"><div class="chart-bar" style="height:3px;background:#b45309;width:100%"></div><div class="chart-lbl" style="color:#b45309;font-size:.45rem">L</div></div>';return}}
+      if(r.hours<=0){{barsHtml+='<div class="chart-bar-col"><div class="chart-bar" style="height:0;background:var(--fail);min-height:2px;width:100%"></div><div class="chart-lbl" style="color:var(--fail)">'+r.day+'</div></div>';return}}
       var pct=(r.hours/maxH*100).toFixed(1);
       var col=r.hours>=TARGET?'var(--ok)':'var(--fail)';
       barsHtml+='<div class="chart-bar-col"><div class="chart-bar" style="height:'+pct+'%;background:'+col+';width:100%"></div><div class="chart-lbl">'+r.day+'</div></div>';
@@ -1808,11 +1857,23 @@ body{{background:var(--bg);color:var(--text);font-family:-apple-system,system-ui
     document.getElementById('ana-chart-card').style.display='';
     var tbody='';
     recs.forEach(function(r){{
-      if(r.hours<=0)return;
-      var diff=r.hours-TARGET;
-      var cls=diff>=0?'over':'under';
-      var sign=diff>=0?'+':'';
-      tbody+='<tr><td>'+r.date+'</td><td>'+r.day+'</td><td>'+r.timein+'</td><td>'+r.timeout+'</td><td>'+r.hours.toFixed(2)+'</td><td class="'+cls+'">'+sign+diff.toFixed(2)+'h</td></tr>';
+      var tp=r.type||'workday';
+      if(tp==='weekend'){{
+        tbody+='<tr style="color:var(--text2);opacity:.6"><td>'+r.date+'</td><td>'+r.day+'</td><td colspan="3" style="text-align:center;font-style:italic">Weekend</td><td></td></tr>';
+      }}else if(tp==='holiday'){{
+        tbody+='<tr style="color:var(--primary);background:rgba(59,130,246,.06)"><td>'+r.date+'</td><td>'+r.day+'</td><td colspan="3" style="text-align:center;font-weight:600">'+r.label+'</td><td></td></tr>';
+      }}else if(tp==='leave'){{
+        tbody+='<tr style="color:#b45309;background:rgba(234,179,8,.06)"><td>'+r.date+'</td><td>'+r.day+'</td><td colspan="3" style="text-align:center;font-weight:600">'+r.label+'</td><td></td></tr>';
+      }}else if(tp==='future'){{
+        tbody+='<tr style="color:var(--text2);opacity:.4"><td>'+r.date+'</td><td>'+r.day+'</td><td colspan="3" style="text-align:center;font-style:italic">Upcoming</td><td></td></tr>';
+      }}else if(tp==='missing'){{
+        tbody+='<tr style="color:var(--fail);background:rgba(239,68,68,.06)"><td>'+r.date+'</td><td>'+r.day+'</td><td colspan="3" style="text-align:center;font-weight:600">No record</td><td></td></tr>';
+      }}else{{
+        var diff=r.hours-TARGET;
+        var cls=diff>=0?'over':'under';
+        var sign=diff>=0?'+':'';
+        tbody+='<tr><td>'+r.date+'</td><td>'+r.day+'</td><td>'+r.timein+'</td><td>'+r.timeout+'</td><td>'+r.hours.toFixed(2)+'</td><td class="'+cls+'">'+sign+diff.toFixed(2)+'h</td></tr>';
+      }}
     }});
     document.getElementById('ana-tbody').innerHTML=tbody||'<tr><td colspan="6" style="color:var(--text2);font-style:italic">No records in this range.</td></tr>';
     var totalDiff=worked.reduce(function(a,r){{return a+(r.hours-TARGET)}},0);
