@@ -223,21 +223,22 @@ def export_status_json():
 
 def export_history_json():
     """Regenerate timein_history.json from all successful events ever
-    recorded."""
+    recorded, including pre-existing portal entries."""
     init_db()
     conn = get_connection()
     try:
         rows = conn.execute(
-            "SELECT date, mode, action_time FROM events "
-            "WHERE status='success' AND action_time IS NOT NULL "
-            "AND action_origin='bot' ORDER BY id ASC"
+            "SELECT date, mode, action_time, observed_time, action_origin "
+            "FROM events WHERE status='success' ORDER BY id ASC"
         ).fetchall()
     finally:
         conn.close()
 
     records = {}
     for r in rows:
-        records.setdefault(r["date"], {})[r["mode"]] = r["action_time"]
+        time_val = r["action_time"] or r["observed_time"]
+        if time_val:
+            records.setdefault(r["date"], {})[r["mode"]] = time_val
     _atomic_write_json(HISTORY_FILE, {"records": records})
 
 

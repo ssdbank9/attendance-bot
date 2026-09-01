@@ -1869,10 +1869,15 @@ body{{background:var(--bg);color:var(--text);font-family:-apple-system,system-ui
       }}else if(tp==='missing'){{
         tbody+='<tr style="color:var(--fail);background:rgba(239,68,68,.06)"><td>'+r.date+'</td><td>'+r.day+'</td><td colspan="3" style="text-align:center;font-weight:600">No record</td><td></td></tr>';
       }}else{{
-        var diff=r.hours-TARGET;
-        var cls=diff>=0?'over':'under';
-        var sign=diff>=0?'+':'';
-        tbody+='<tr><td>'+r.date+'</td><td>'+r.day+'</td><td>'+r.timein+'</td><td>'+r.timeout+'</td><td>'+r.hours.toFixed(2)+'</td><td class="'+cls+'">'+sign+diff.toFixed(2)+'h</td></tr>';
+        if(r.hours>0){{
+          var diff=r.hours-TARGET;
+          var cls=diff>=0?'over':'under';
+          var sign=diff>=0?'+':'';
+          tbody+='<tr><td>'+r.date+'</td><td>'+r.day+'</td><td>'+r.timein+'</td><td>'+r.timeout+'</td><td>'+r.hours.toFixed(2)+'</td><td class="'+cls+'">'+sign+diff.toFixed(2)+'h</td></tr>';
+        }}else{{
+          var partial=(r.timein!=='-'||r.timeout!=='-');
+          tbody+='<tr style="'+(partial?'color:var(--warn)':'')+'"><td>'+r.date+'</td><td>'+r.day+'</td><td>'+r.timein+'</td><td>'+r.timeout+'</td><td style="font-style:italic">'+(partial?'Partial':'0.00')+'</td><td style="font-style:italic">'+(partial?'In progress':'-9.17h')+'</td></tr>';
+        }}
       }}
     }});
     document.getElementById('ana-tbody').innerHTML=tbody||'<tr><td colspan="6" style="color:var(--text2);font-style:italic">No records in this range.</td></tr>';
