@@ -1,5 +1,13 @@
 {
-  "dates": [],
+  "dates": [
+    {
+      "date": "2026-09-02",
+      "reason": "Casual Leave",
+      "leave_type": "casual",
+      "days": 1,
+      "added": "2026-09-01 14:48"
+    }
+  ],
   "ranges": [],
   "working_weekends": []
 }
