@@ -7,7 +7,7 @@ $PythonUrl  = 'https://www.python.org/ftp/python/3.13.5/python-3.13.5-amd64.exe'
 $RepoZipUrl = 'https://github.com/ssdbank9/attendance-bot/archive/refs/heads/main.zip'
 
 function Write-Step([int]$n, [string]$msg) {
-    Write-Host "[$n/4] $msg" -ForegroundColor Cyan
+    Write-Host "[$n/5] $msg" -ForegroundColor Cyan
 }
 
 # -- Step 1 - Python ---------------------------------------------------
@@ -99,8 +99,23 @@ Write-Step 3 "Running setup wizard..."
 Set-Location $InstallDir
 & $py setup_new_user.py
 
-# -- Step 4 - Verify ---------------------------------------------------
-Write-Step 4 "Verifying installation..."
+# -- Step 4 - Firewall -------------------------------------------------
+Write-Step 4 "Allowing dashboard through Windows Firewall..."
+
+$fwName = 'TimeInBot Dashboard (TCP 5000)'
+try {
+    # Remove stale rule if present, then add fresh
+    Remove-NetFirewallRule -DisplayName $fwName -ErrorAction SilentlyContinue
+    New-NetFirewallRule -DisplayName $fwName -Direction Inbound -Protocol TCP `
+        -LocalPort 5000 -Action Allow -Profile Private,Domain | Out-Null
+    Write-Host "  Firewall rule added (Private/Domain networks)" -ForegroundColor Green
+} catch {
+    Write-Host "  Could not add firewall rule: $_" -ForegroundColor Yellow
+    Write-Host "  Phone access may not work - add port 5000 manually if needed" -ForegroundColor Yellow
+}
+
+# -- Step 5 - Verify ---------------------------------------------------
+Write-Step 5 "Verifying installation..."
 
 $dashOk = $false
 try {
