@@ -3,5 +3,13 @@
   "ranges": [],
   "working_weekends": [],
   "wfh": [],
-  "wfh_ranges": []
+  "wfh_ranges": [
+    {
+      "start": "2026-09-03",
+      "end": "2026-09-05",
+      "reason": "Remote week",
+      "days": 2,
+      "added": "2026-09-02 09:58"
+    }
+  ]
 }
