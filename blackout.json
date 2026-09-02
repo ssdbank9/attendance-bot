@@ -2,12 +2,6 @@
   "dates": [],
   "ranges": [],
   "working_weekends": [],
-  "wfh": [
-    {
-      "date": "2026-09-02",
-      "reason": "Testing dashboard UI",
-      "added": "2026-09-02 10:03"
-    }
-  ],
+  "wfh": [],
   "wfh_ranges": []
 }
