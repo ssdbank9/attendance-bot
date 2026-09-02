@@ -29,7 +29,7 @@ CREATE TABLE IF NOT EXISTS events (
     message TEXT,
     action_time TEXT,
     action_origin TEXT NOT NULL DEFAULT 'bot'
-        CHECK(action_origin IN ('bot', 'preexisting', 'unknown')),
+        CHECK(action_origin IN ('bot', 'preexisting', 'unknown', 'wfh')),
     observed_time TEXT,
     recorded_at TEXT NOT NULL
 );
@@ -54,7 +54,7 @@ def init_db():
         if "action_origin" not in columns:
             conn.execute(
                 "ALTER TABLE events ADD COLUMN action_origin TEXT NOT NULL "
-                "DEFAULT 'bot' CHECK(action_origin IN ('bot', 'preexisting', 'unknown'))"
+                "DEFAULT 'bot' CHECK(action_origin IN ('bot', 'preexisting', 'unknown', 'wfh'))"
             )
         if "observed_time" not in columns:
             conn.execute("ALTER TABLE events ADD COLUMN observed_time TEXT")

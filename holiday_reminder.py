@@ -61,6 +61,17 @@ def is_blacked_out(date_str):
     return False, None
 
 
+def is_wfh(date_str):
+    data = load_json(BLACKOUT_FILE)
+    for d in data.get("wfh", []):
+        if d["date"] == date_str:
+            return True, d.get("reason", "Work from home")
+    for r in data.get("wfh_ranges", []):
+        if r["start"] <= date_str <= r["end"]:
+            return True, r.get("reason", "Work from home")
+    return False, None
+
+
 def get_holidays_in_days(days):
     data = load_json(HOLIDAYS_FILE)
     target = (pk_now() + timedelta(days=days)).strftime("%Y-%m-%d")
@@ -157,6 +168,12 @@ def send_tomorrow_notification():
     blacked, bl_reason = is_blacked_out(tomorrow_str)
     if blacked:
         notify_tomorrow_skipped(day_name, bl_reason)
+        return
+
+    wfh, wfh_reason = is_wfh(tomorrow_str)
+    if wfh:
+        from notify import notify_tomorrow_wfh
+        notify_tomorrow_wfh(day_name, wfh_reason)
         return
 
     notify_tomorrow(day_name, tomorrow_str)

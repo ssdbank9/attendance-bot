@@ -97,7 +97,7 @@ app.secret_key = hashlib.sha256(
 @app.before_request
 def require_dashboard_authentication():
     """Protect every dashboard route except the login entry point itself."""
-    if request.endpoint == "login":
+    if request.endpoint in ("login", "action_snooze_tomorrow", "action_ignore_tomorrow"):
         return None
     if session.get("dashboard_authenticated") is True:
         return None
@@ -240,6 +240,8 @@ def get_next_workdays(n=5):
     bl_dates = set(bl_entries.keys())
     bl_ranges = blackout.get("ranges", [])
     working_wkends = set(blackout.get("working_weekends", []))
+    wfh_entries = {w["date"]: w for w in blackout.get("wfh", [])}
+    wfh_ranges = blackout.get("wfh_ranges", [])
     while len(days) < n:
         ds = d.strftime("%Y-%m-%d")
         skip = None
@@ -262,8 +264,17 @@ def get_next_workdays(n=5):
                 if r["start"] <= ds <= r["end"]:
                     skip = "Leave"
                     break
+        wfh = False
+        if not skip:
+            if ds in wfh_entries:
+                wfh = True
+            else:
+                for wr in wfh_ranges:
+                    if wr.get("start", "") <= ds <= wr.get("end", ""):
+                        wfh = True
+                        break
         entry = {"date": ds, "day": d.strftime("%a"), "label": d.strftime("%b %d"),
-                 "skip": skip, "is_weekend": d.weekday() >= 5,
+                 "skip": skip, "wfh": wfh, "is_weekend": d.weekday() >= 5,
                  "working_weekend": d.weekday() >= 5 and ds in working_wkends,
                  "is_today": ds == today_str, "attendance": None}
         if entry["is_today"]:
@@ -288,7 +299,9 @@ def get_active_blackouts():
     today = pk_now().strftime("%Y-%m-%d")
     dates = [d for d in data.get("dates", []) if d["date"] >= today]
     ranges = [r for r in data.get("ranges", []) if r["end"] >= today]
-    return dates, ranges
+    wfh_dates = [d for d in data.get("wfh", []) if d["date"] >= today]
+    wfh_ranges = [r for r in data.get("wfh_ranges", []) if r["end"] >= today]
+    return dates, ranges, wfh_dates, wfh_ranges
 
 
 def _clock_row():
@@ -427,6 +440,28 @@ def _sync_blackout_to_cloud():
         pass
 
 
+def _count_working_days(start_str, end_str):
+    """Count weekdays in [start, end] excluding holidays."""
+    hol_data = load_json(HOLIDAYS_FILE)
+    hol_dates = {h["date"] for h in hol_data.get("holidays", []) if not h.get("disabled")}
+    bl_data = load_json(BLACKOUT_FILE)
+    working_wkends = set(bl_data.get("working_weekends", []))
+    count = 0
+    cur = datetime.strptime(start_str, "%Y-%m-%d")
+    end = datetime.strptime(end_str, "%Y-%m-%d")
+    while cur <= end:
+        ds = cur.strftime("%Y-%m-%d")
+        is_wkend = cur.weekday() >= 5
+        if is_wkend and ds not in working_wkends:
+            pass
+        elif ds in hol_dates:
+            pass
+        else:
+            count += 1
+        cur += timedelta(days=1)
+    return count
+
+
 def should_notify_holiday_change():
     return load_notif_prefs().get("preferences", {}).get("holiday_change", True)
 
@@ -463,6 +498,36 @@ def action_cancel_skip_tomorrow():
     from notify import notify
     notify("Tomorrow un-skipped from dashboard.", title="Skip Cancelled", tags="white_check_mark")
     return redirect(url_for("dashboard", msg="Tomorrow un-skipped"))
+
+@app.route("/action/snooze-tomorrow")
+def action_snooze_tomorrow():
+    from notify import notify_tomorrow
+    tomorrow = pk_now() + timedelta(days=1)
+    day_name = tomorrow.strftime("%A")
+    date_str = tomorrow.strftime("%Y-%m-%d")
+    from notify import send_ntfy, get_dashboard_url
+    dashboard = get_dashboard_url()
+    send_ntfy(
+        "Bot will run tomorrow ({day} {dt}). Tap to skip.".format(day=day_name, dt=date_str),
+        title="Tomorrow\'s Plan (Snoozed)",
+        tags="calendar,alarm_clock",
+        click="{dash}/?tab=home".format(dash=dashboard),
+        actions=(
+            "view, Skip Tomorrow, {dash}/action/skip-tomorrow; "
+            "http, Snooze 2h, {dash}/action/snooze-tomorrow, method=GET; "
+            "http, Ignore, {dash}/action/ignore-tomorrow, method=GET"
+        ).format(dash=dashboard),
+        delay="2h",
+    )
+    if request.headers.get("User-Agent", "").startswith("ntfy/"):
+        return "Snoozed", 200
+    return redirect(url_for("dashboard", msg="Snoozed - reminder in 2 hours"))
+
+@app.route("/action/ignore-tomorrow")
+def action_ignore_tomorrow():
+    if request.headers.get("User-Agent", "").startswith("ntfy/"):
+        return "OK", 200
+    return redirect(url_for("dashboard", msg="Notification dismissed"))
 
 @app.route("/action/skip-date/<date>")
 def action_skip_date(date):
@@ -791,7 +856,11 @@ def action_save_leave_balance():
 def action_add_leave():
     start = request.form.get("leave_start", "").strip()
     end = request.form.get("leave_end", "").strip()
-    reason = request.form.get("leave_reason", "").strip() or "Leave"
+    leave_type = request.form.get("leave_type", "other").strip()
+    reason = request.form.get("leave_reason", "").strip()
+    if not reason:
+        type_labels = {"casual": "Casual Leave", "sick": "Sick Leave", "earned": "Earned Leave", "other": "Leave"}
+        reason = type_labels.get(leave_type, "Leave")
     if not start:
         return redirect(url_for("dashboard"))
     if not end:
@@ -800,39 +869,324 @@ def action_add_leave():
         return redirect(url_for("dashboard", msg="Leave dates must be real dates (YYYY-MM-DD)"))
     if start > end:
         start, end = end, start
+    with _LEAVE_UPDATE_LOCK:
+        config = load_config()
+        lb = config.get("leave_balance", {})
+        data = load_json(BLACKOUT_FILE)
+        if not data.get("dates"):
+            data["dates"] = []
+        if not data.get("ranges"):
+            data["ranges"] = []
+        type_map = {"casual": "casual", "sick": "sick", "earned": "earned", "other": None}
+        bal_key = type_map.get(leave_type)
+        if start == end:
+            for d in data["dates"]:
+                if d["date"] == start:
+                    return redirect(url_for("dashboard", msg=f"Date {start} is already blocked"))
+            days = 1
+            if bal_key and bal_key in lb:
+                remaining = lb[bal_key].get("remaining", 0)
+                if remaining < days:
+                    return redirect(url_for("dashboard", msg=f"Insufficient {reason} balance: {remaining} days left"))
+            entry = {"date": start, "reason": reason, "leave_type": leave_type,
+                     "days": days, "added": pk_now().strftime("%Y-%m-%d %H:%M")}
+            data["dates"].append(entry)
+            data["dates"].sort(key=lambda d: d["date"])
+        else:
+            for r in data["ranges"]:
+                if r["start"] == start and r["end"] == end:
+                    return redirect(url_for("dashboard", msg="This range is already blocked"))
+            days = _count_working_days(start, end)
+            if days == 0:
+                return redirect(url_for("dashboard", msg="No working days in that range"))
+            if bal_key and bal_key in lb:
+                remaining = lb[bal_key].get("remaining", 0)
+                if remaining < days:
+                    return redirect(url_for("dashboard", msg=f"Insufficient {reason} balance: {remaining} days left (need {days})"))
+            entry = {"start": start, "end": end, "reason": reason, "leave_type": leave_type,
+                     "days": days, "added": pk_now().strftime("%Y-%m-%d %H:%M")}
+            data["ranges"].append(entry)
+            data["ranges"].sort(key=lambda r: r["start"])
+        save_json(BLACKOUT_FILE, data)
+        if bal_key and bal_key in lb:
+            val = lb[bal_key].get("remaining", 0) - days
+            lb[bal_key]["remaining"] = int(val) if val == int(val) else val
+            save_json(CONFIG_FILE, config)
+        _write_leave_balance(config)
+    _sync_blackout_to_cloud()
+    _sync_leave_balance_to_cloud()
+    from notify import notify
+    label = f"{start}" if start == end else f"{start} to {end}"
+    notify(f"{reason}: {label} ({days}d)", title="Leave Marked", tags="palm_tree")
+    return redirect(url_for("dashboard", msg=f"{reason} marked: {label} ({days} working days)"))
+
+@app.route("/action/cancel-range/<start>/<end>")
+def action_cancel_range(start, end):
+    with _LEAVE_UPDATE_LOCK:
+        config = load_config()
+        data = load_json(BLACKOUT_FILE)
+        removed = None
+        new_ranges = []
+        for r in data.get("ranges", []):
+            if r["start"] == start and r["end"] == end and removed is None:
+                removed = r
+            else:
+                new_ranges.append(r)
+        if not removed:
+            return redirect(url_for("dashboard", msg=f"No range found for {start} to {end}"))
+        data["ranges"] = new_ranges
+        save_json(BLACKOUT_FILE, data)
+        lt = removed.get("leave_type")
+        days = removed.get("days", 0)
+        lb = config.get("leave_balance", {})
+        type_map = {"casual": "casual", "sick": "sick", "earned": "earned"}
+        bal_key = type_map.get(lt)
+        if bal_key and bal_key in lb and days:
+            val = lb[bal_key].get("remaining", 0) + days
+            lb[bal_key]["remaining"] = int(val) if val == int(val) else val
+            save_json(CONFIG_FILE, config)
+        _write_leave_balance(config)
+    _sync_blackout_to_cloud()
+    _sync_leave_balance_to_cloud()
+    from notify import notify
+    refund_msg = f" ({days}d refunded)" if days and bal_key else ""
+    notify(f"Leave cancelled: {start} to {end}{refund_msg}", title="Leave Cancelled", tags="white_check_mark")
+    return redirect(url_for("dashboard", msg=f"Leave cancelled: {start} to {end}{refund_msg}"))
+
+
+@app.route("/action/add-wfh", methods=["POST"])
+def action_add_wfh():
+    start = request.form.get("wfh_start", "").strip()
+    end = request.form.get("wfh_end", "").strip()
+    reason = request.form.get("wfh_reason", "").strip() or "Work from home"
+    if not start:
+        return redirect(url_for("dashboard"))
+    if not end:
+        end = start
+    if not _valid_date(start) or not _valid_date(end):
+        return redirect(url_for("dashboard", msg="WFH dates must be real dates (YYYY-MM-DD)"))
+    if start > end:
+        start, end = end, start
     data = load_json(BLACKOUT_FILE)
-    if not data.get("dates"):
-        data["dates"] = []
-    if not data.get("ranges"):
-        data["ranges"] = []
+    if "wfh" not in data:
+        data["wfh"] = []
+    if "wfh_ranges" not in data:
+        data["wfh_ranges"] = []
     if start == end:
-        for d in data["dates"]:
+        for d in data["wfh"]:
             if d["date"] == start:
-                return redirect(url_for("dashboard"))
-        data["dates"].append({"date": start, "reason": reason, "added": pk_now().strftime("%Y-%m-%d %H:%M")})
-        data["dates"].sort(key=lambda d: d["date"])
+                return redirect(url_for("dashboard", msg=f"WFH already marked for {start}"))
+        entry = {"date": start, "reason": reason,
+                 "added": pk_now().strftime("%Y-%m-%d %H:%M")}
+        data["wfh"].append(entry)
+        data["wfh"].sort(key=lambda d: d["date"])
+        days = 1
     else:
-        for r in data["ranges"]:
+        for r in data["wfh_ranges"]:
             if r["start"] == start and r["end"] == end:
-                return redirect(url_for("dashboard"))
-        data["ranges"].append({"start": start, "end": end, "reason": reason, "added": pk_now().strftime("%Y-%m-%d %H:%M")})
-        data["ranges"].sort(key=lambda r: r["start"])
+                return redirect(url_for("dashboard", msg="WFH range already exists"))
+        days = _count_working_days(start, end)
+        if days == 0:
+            return redirect(url_for("dashboard", msg="No working days in that range"))
+        entry = {"start": start, "end": end, "reason": reason, "days": days,
+                 "added": pk_now().strftime("%Y-%m-%d %H:%M")}
+        data["wfh_ranges"].append(entry)
+        data["wfh_ranges"].sort(key=lambda r: r["start"])
     save_json(BLACKOUT_FILE, data)
     _sync_blackout_to_cloud()
     from notify import notify
     label = f"{start}" if start == end else f"{start} to {end}"
-    notify(f"Leave added: {label} - {reason}", title="Leave Added", tags="palm_tree")
-    return redirect(url_for("dashboard", msg="Leave added"))
+    notify(f"WFH: {label} ({days}d)", title="WFH Marked", tags="house")
+    return redirect(url_for("dashboard", msg=f"WFH marked: {label} ({days} working days)"))
 
-@app.route("/action/cancel-range/<start>/<end>")
-def action_cancel_range(start, end):
+
+@app.route("/action/quick-wfh/<date>")
+def action_quick_wfh(date):
+    if not _valid_date(date):
+        return redirect(url_for("dashboard", msg="Invalid date"))
     data = load_json(BLACKOUT_FILE)
-    data["ranges"] = [r for r in data.get("ranges", []) if not (r["start"] == start and r["end"] == end)]
+    if "wfh" not in data:
+        data["wfh"] = []
+    for d in data["wfh"]:
+        if d["date"] == date:
+            return redirect(url_for("dashboard", msg=f"Already WFH on {date}"))
+    for r in data.get("wfh_ranges", []):
+        if r.get("start", "") <= date <= r.get("end", ""):
+            return redirect(url_for("dashboard", msg=f"Already WFH (range) on {date}"))
+    data["wfh"].append({"date": date, "reason": "Work from home",
+                        "added": pk_now().strftime("%Y-%m-%d %H:%M")})
+    data["wfh"].sort(key=lambda d: d["date"])
     save_json(BLACKOUT_FILE, data)
     _sync_blackout_to_cloud()
     from notify import notify
-    notify(f"Leave cancelled: {start} to {end}", title="Leave Cancelled", tags="white_check_mark")
-    return redirect(url_for("dashboard"))
+    notify(f"WFH: {date}", title="WFH Marked", tags="house")
+    return redirect(url_for("dashboard", msg=f"WFH marked for {date}"))
+
+
+@app.route("/action/cancel-wfh/<date>")
+def action_cancel_wfh(date):
+    if not _valid_date(date):
+        return redirect(url_for("dashboard", msg=f"Not a valid date: {date}"))
+    data = load_json(BLACKOUT_FILE)
+    new_wfh = [d for d in data.get("wfh", []) if d["date"] != date]
+    if len(new_wfh) == len(data.get("wfh", [])):
+        return redirect(url_for("dashboard", msg=f"No WFH entry found for {date}"))
+    data["wfh"] = new_wfh
+    save_json(BLACKOUT_FILE, data)
+    _sync_blackout_to_cloud()
+    from notify import notify
+    notify(f"WFH cancelled: {date}", title="WFH Cancelled", tags="white_check_mark")
+    return redirect(url_for("dashboard", msg=f"WFH cancelled: {date}"))
+
+
+@app.route("/action/cancel-wfh-range/<start>/<end>")
+def action_cancel_wfh_range(start, end):
+    data = load_json(BLACKOUT_FILE)
+    removed = None
+    new_ranges = []
+    for r in data.get("wfh_ranges", []):
+        if r["start"] == start and r["end"] == end and removed is None:
+            removed = r
+        else:
+            new_ranges.append(r)
+    if not removed:
+        return redirect(url_for("dashboard", msg=f"No WFH range found for {start} to {end}"))
+    data["wfh_ranges"] = new_ranges
+    save_json(BLACKOUT_FILE, data)
+    _sync_blackout_to_cloud()
+    from notify import notify
+    notify(f"WFH range cancelled: {start} to {end}", title="WFH Cancelled", tags="white_check_mark")
+    return redirect(url_for("dashboard", msg=f"WFH range cancelled: {start} to {end}"))
+
+
+@app.route("/action/cancel-wfh-today")
+def action_cancel_wfh_today():
+    today_str = pk_now().strftime("%Y-%m-%d")
+    data = load_json(BLACKOUT_FILE)
+    new_wfh = [d for d in data.get("wfh", []) if d["date"] != today_str]
+    removed = len(new_wfh) < len(data.get("wfh", []))
+    if not removed:
+        in_range = False
+        for r in data.get("wfh_ranges", []):
+            if r["start"] <= today_str <= r["end"]:
+                in_range = True
+                break
+        if in_range:
+            msg = "Today is part of a WFH range. Cancel the full range from the dashboard."
+            if request.headers.get("User-Agent", "").startswith("ntfy/"):
+                return msg, 200
+            return redirect(url_for("dashboard", msg=msg))
+        msg = "No WFH entry for today"
+        if request.headers.get("User-Agent", "").startswith("ntfy/"):
+            return msg, 200
+        return redirect(url_for("dashboard", msg=msg))
+    data["wfh"] = new_wfh
+    save_json(BLACKOUT_FILE, data)
+    _sync_blackout_to_cloud()
+    from notify import notify
+    notify(f"WFH cancelled for today ({today_str})", title="WFH Cancelled", tags="white_check_mark")
+    if request.headers.get("User-Agent", "").startswith("ntfy/"):
+        return "WFH cancelled for today", 200
+    return redirect(url_for("dashboard", msg=f"WFH cancelled for today ({today_str})"))
+
+
+@app.route("/action/cancel-wfh-tomorrow")
+def action_cancel_wfh_tomorrow():
+    tomorrow_str = (pk_now() + timedelta(days=1)).strftime("%Y-%m-%d")
+    data = load_json(BLACKOUT_FILE)
+    new_wfh = [d for d in data.get("wfh", []) if d["date"] != tomorrow_str]
+    removed = len(new_wfh) < len(data.get("wfh", []))
+    if not removed:
+        in_range = False
+        for r in data.get("wfh_ranges", []):
+            if r["start"] <= tomorrow_str <= r["end"]:
+                in_range = True
+                break
+        if in_range:
+            msg = "Tomorrow is part of a WFH range. Cancel the full range from the dashboard."
+            if request.headers.get("User-Agent", "").startswith("ntfy/"):
+                return msg, 200
+            return redirect(url_for("dashboard", msg=msg))
+        msg = "No WFH entry for tomorrow"
+        if request.headers.get("User-Agent", "").startswith("ntfy/"):
+            return msg, 200
+        return redirect(url_for("dashboard", msg=msg))
+    data["wfh"] = new_wfh
+    save_json(BLACKOUT_FILE, data)
+    _sync_blackout_to_cloud()
+    from notify import notify
+    notify(f"WFH cancelled for tomorrow ({tomorrow_str})", title="WFH Cancelled", tags="white_check_mark")
+    if request.headers.get("User-Agent", "").startswith("ntfy/"):
+        return "WFH cancelled for tomorrow", 200
+    return redirect(url_for("dashboard", msg=f"WFH cancelled for tomorrow ({tomorrow_str})"))
+
+
+@app.route("/action/wfh-timein", methods=["POST"])
+def action_wfh_timein():
+    today_str = pk_now().strftime("%Y-%m-%d")
+    now_time = pk_now().strftime("%H:%M:%S")
+    from attendance_db import record_event, get_latest
+    existing = get_latest("timein", today_str)
+    if existing and existing.get("action_origin") == "wfh":
+        return redirect(url_for("dashboard", msg=f"WFH clock-in already recorded at {existing.get('action_time', '?')}"))
+    record_event(today_str, "timein", "success", "WFH clock-in",
+                 action_time=now_time, action_origin="wfh")
+    from notify import notify
+    notify(f"WFH clock-in at {now_time}", title="WFH Clock In", tags="house,clock1")
+    return redirect(url_for("dashboard", msg=f"WFH clock-in recorded at {now_time}"))
+
+
+@app.route("/action/wfh-timeout", methods=["POST"])
+def action_wfh_timeout():
+    today_str = pk_now().strftime("%Y-%m-%d")
+    now_time = pk_now().strftime("%H:%M:%S")
+    from attendance_db import record_event, get_latest
+    existing_in = get_latest("timein", today_str)
+    if not existing_in or existing_in.get("action_origin") != "wfh":
+        return redirect(url_for("dashboard", msg="No WFH clock-in found for today. Clock in first."))
+    existing_out = get_latest("timeout", today_str)
+    if existing_out and existing_out.get("action_origin") == "wfh":
+        return redirect(url_for("dashboard", msg=f"WFH clock-out already recorded at {existing_out.get('action_time', '?')}"))
+    record_event(today_str, "timeout", "success", "WFH clock-out",
+                 action_time=now_time, action_origin="wfh")
+    from notify import notify
+    notify(f"WFH clock-out at {now_time}", title="WFH Clock Out", tags="house,clock1")
+    return redirect(url_for("dashboard", msg=f"WFH clock-out recorded at {now_time}"))
+
+
+@app.route("/api/wfh-clock-status")
+def api_wfh_clock_status():
+    today_str = pk_now().strftime("%Y-%m-%d")
+    from attendance_db import get_latest
+    ti = get_latest("timein", today_str)
+    to = get_latest("timeout", today_str)
+    wfh_in = ti if ti and ti.get("action_origin") == "wfh" else None
+    wfh_out = to if to and to.get("action_origin") == "wfh" else None
+    is_wfh_today = False
+    data = load_json(BLACKOUT_FILE)
+    for d in data.get("wfh", []):
+        if d["date"] == today_str:
+            is_wfh_today = True
+            break
+    if not is_wfh_today:
+        for r in data.get("wfh_ranges", []):
+            if r["start"] <= today_str <= r["end"]:
+                is_wfh_today = True
+                break
+    return json.dumps({
+        "is_wfh_today": is_wfh_today,
+        "clocked_in": wfh_in["action_time"] if wfh_in else None,
+        "clocked_out": wfh_out["action_time"] if wfh_out else None,
+    })
+
+
+@app.route("/api/wfh-entries")
+def api_wfh_entries():
+    data = load_json(BLACKOUT_FILE)
+    return json.dumps({
+        "wfh": data.get("wfh", []),
+        "wfh_ranges": data.get("wfh_ranges", []),
+    })
 
 @app.route("/api/leave-summary")
 def api_leave_summary():
@@ -965,6 +1319,7 @@ def api_action(action_path):
         "toggle-pause": "action_toggle_pause",
         "timein-now": "action_timein_now",
         "timeout-now": "action_timeout_now",
+        "sync-portal": "action_sync_portal",
         "test-cloud-sync": "action_test_cloud_sync",
     }
     endpoint = allowed_actions.get(action_path)
@@ -1030,6 +1385,43 @@ def action_timeout_now():
     if died_silently:
         from notify import notify
         notify(msg, title="Manual Time-Out Failed", priority="high", tags="rotating_light")
+    return redirect(url_for("dashboard", msg=msg))
+
+@app.route("/action/sync-portal")
+def action_sync_portal():
+    """Check the AKU portal for today's attendance and update records."""
+    try:
+        proc = subprocess.run(
+            [_system_python(), str(BASE_DIR / "timein_bot.py"), "recheck"],
+            capture_output=True, text=True, timeout=60,
+            creationflags=subprocess.CREATE_NO_WINDOW,
+        )
+    except subprocess.TimeoutExpired:
+        return redirect(url_for("dashboard", msg="Portal sync timed out"))
+    except Exception as e:
+        return redirect(url_for("dashboard", msg=f"Portal sync error: {e}"))
+    if proc.returncode != 0:
+        stderr = (proc.stderr or "").strip()[:200]
+        return redirect(url_for("dashboard", msg=f"Portal sync failed: {stderr or 'exit code ' + str(proc.returncode)}"))
+    today = pk_now().strftime("%Y-%m-%d")
+    status = load_json(STATUS_FILE)
+    results = []
+    synced = False
+    for mode in ("timein", "timeout"):
+        label = "Time-In" if mode == "timein" else "Time-Out"
+        rec = status.get(mode, {})
+        if rec.get("date") == today and rec.get("status") == "success":
+            t = rec.get("action_time") or rec.get("observed_time", "?")
+            results.append(f"{label}: {t}")
+            synced = True
+        elif rec.get("date") == today:
+            results.append(f"{label}: {rec.get('status', 'unknown')}")
+        else:
+            results.append(f"{label}: no record yet")
+    if synced:
+        msg = "Portal sync: " + " | ".join(results)
+    else:
+        msg = "Nothing to sync - no failed attempts found today"
     return redirect(url_for("dashboard", msg=msg))
 
 @app.route("/action/update-notifications", methods=["POST"])
@@ -1109,6 +1501,8 @@ def api_analytics():
     bl_dates = {d["date"]: d for d in blackout.get("dates", [])}
     bl_ranges = blackout.get("ranges", [])
     working_weekends = blackout.get("working_weekends", [])
+    wfh_map = {d["date"]: d for d in blackout.get("wfh", [])}
+    wfh_range_list = blackout.get("wfh_ranges", [])
     holidays_data = load_json(HOLIDAYS_FILE)
     hol_map = {h["date"]: h.get("label", "Holiday") for h in holidays_data.get("holidays", []) if not h.get("disabled")}
     days = []
@@ -1129,7 +1523,18 @@ def api_analytics():
             if r.get("start", "") <= ds <= r.get("end", ""):
                 bl_range = r
                 break
-        if ti or to:
+        wfh_entry = wfh_map.get(ds)
+        wfh_range_match = None
+        if not wfh_entry:
+            for wr in wfh_range_list:
+                if wr.get("start", "") <= ds <= wr.get("end", ""):
+                    wfh_range_match = wr
+                    break
+        is_wfh = wfh_entry or wfh_range_match
+        if is_wfh:
+            day_type = "wfh"
+            label = (wfh_entry or wfh_range_match).get("reason", "Work from home")
+        elif ti or to:
             day_type = "workday"
             label = ""
         elif hol_name:
@@ -1196,6 +1601,9 @@ def render_workdays(days):
         elif d.get("working_weekend"):
             badge = '<span class="badge ok">Working</span>'
             badge += f' <a class="btn sm danger" style="padding:.2rem .4rem;font-size:.65rem" href="/action/remove-working-weekend/{d["date"]}">Undo</a>'
+        elif d.get("wfh"):
+            badge = '<span class="badge" style="background:var(--wfh-color,#2196F3);color:#fff">WFH</span>'
+            badge += f' <a class="btn sm danger" style="padding:.2rem .4rem;font-size:.65rem" href="/action/cancel-wfh/{d["date"]}">Undo</a>'
         elif d["skip"]:
             badge = f'<span class="badge skip">{html.escape(str(d["skip"]))}</span>'
             if d.get("is_weekend"):
@@ -1203,6 +1611,7 @@ def render_workdays(days):
         else:
             badge = '<span class="badge ok">Active</span>'
             badge += ' <a class="btn sm outline" style="padding:.2rem .4rem;font-size:.65rem" href="#" onclick="openLeaveModal(\'' + d["date"] + '\');return false">Leave</a>'
+            badge += f' <a class="btn sm outline" style="padding:.2rem .4rem;font-size:.65rem;border-color:var(--wfh-color,#2196F3);color:var(--wfh-color,#2196F3)" href="/action/quick-wfh/{d["date"]}">WFH</a>'
         day_label = "Today" if d.get("is_today") else d["day"]
         row_cls = "wd-row wd-today" if d.get("is_today") else "wd-row"
         rows.append(f'<div class="{row_cls}"><span class="wd-day">{day_label}</span><span class="wd-date">{d["label"]}</span>{badge}</div>')
@@ -1239,9 +1648,9 @@ def render_holidays(holidays):
             f'{actions_html}</div>')
     return "\n".join(rows)
 
-def render_blackouts(dates, ranges):
-    if not dates and not ranges:
-        return '<p class="empty">No active skips.</p>'
+def render_blackouts(dates, ranges, wfh_dates=None, wfh_ranges=None):
+    if not dates and not ranges and not wfh_dates and not wfh_ranges:
+        return '<p class="empty">No active skips or WFH days.</p>'
     rows = []
     for d in dates:
         dt = datetime.strptime(d["date"], "%Y-%m-%d")
@@ -1258,6 +1667,24 @@ def render_blackouts(dates, ranges):
         rows.append(
             f'<div class="bl-row"><div><strong>{range_start} to {range_end}</strong> - {range_reason}</div>'
             f'<a class="btn sm danger" href="/action/cancel-range/{range_start}/{range_end}">Cancel</a></div>')
+    if wfh_dates:
+        for d in wfh_dates:
+            dt = datetime.strptime(d["date"], "%Y-%m-%d")
+            reason = html.escape(str(d.get("reason", "Work from home")))
+            rows.append(
+                f'<div class="bl-row wfh-row"><div><span class="wfh-badge">WFH</span> '
+                f'<strong>{dt.strftime("%a %b %d")}</strong> - {reason}</div>'
+                f'<a class="btn sm danger" href="/action/cancel-wfh/{d["date"]}">Cancel</a></div>')
+    if wfh_ranges:
+        for r in wfh_ranges:
+            rs = html.escape(str(r["start"]), quote=True)
+            re_ = html.escape(str(r["end"]), quote=True)
+            reason = html.escape(str(r.get("reason", "Work from home")))
+            days_str = f' ({r["days"]}d)' if r.get("days") else ""
+            rows.append(
+                f'<div class="bl-row wfh-row"><div><span class="wfh-badge">WFH</span> '
+                f'<strong>{rs} to {re_}</strong> - {reason}{days_str}</div>'
+                f'<a class="btn sm danger" href="/action/cancel-wfh-range/{rs}/{re_}">Cancel</a></div>')
     return "\n".join(rows)
 
 def render_leave_balance(lb):
@@ -1327,7 +1754,7 @@ def dashboard():
     status = load_json(STATUS_FILE)
     config = load_config()
     upcoming = get_upcoming_holidays()
-    bl_dates, bl_ranges = get_active_blackouts()
+    bl_dates, bl_ranges, wfh_dates, wfh_ranges = get_active_blackouts()
     workdays = get_next_workdays(7)
     today = pk_now().strftime("%Y-%m-%d")
     now = pk_now().strftime("%H:%M")
@@ -1387,7 +1814,7 @@ def dashboard():
         ti_btn="disabled" if ti_done else "",
         to_btn="disabled" if to_done else "",
         workdays_html=render_workdays(workdays), holidays_html=render_holidays(upcoming),
-        blackout_html=render_blackouts(bl_dates, bl_ranges),
+        blackout_html=render_blackouts(bl_dates, bl_ranges, wfh_dates, wfh_ranges),
         user_id=html.escape(str(config.get("credentials", {}).get("user_id", "?")), quote=True),
         password="",
         ti_start=config['timein']['window_start'], ti_end=config['timein']['window_end'],
@@ -1437,6 +1864,12 @@ body{{background:var(--bg);color:var(--text);font-family:-apple-system,system-ui
 .container{{max-width:480px;margin:0 auto;padding:.75rem}}
 .card{{background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:1rem;margin-bottom:.75rem}}
 .card-title{{font-size:.7rem;font-weight:700;text-transform:uppercase;letter-spacing:.08em;color:var(--text2);margin-bottom:.6rem}}
+details.collapsible > summary {{list-style:none;}}
+details.collapsible > summary::-webkit-details-marker {{display:none;}}
+summary.collapsible-title {{cursor:pointer;user-select:none;display:flex;align-items:center;justify-content:space-between;}}
+summary.collapsible-title::after {{content:"\25B6";font-size:.6rem;color:var(--text2);transition:transform .2s;}}
+details.collapsible[open] > summary.collapsible-title::after {{transform:rotate(90deg);}}
+
 .status-grid{{display:grid;grid-template-columns:1fr 1fr;gap:.6rem}}
 .status-box{{background:var(--bg);border-radius:8px;padding:.7rem;text-align:center}}
 .status-box .label{{font-size:.7rem;color:var(--text2);text-transform:uppercase;letter-spacing:.05em}}
@@ -1456,6 +1889,7 @@ body{{background:var(--bg);color:var(--text);font-family:-apple-system,system-ui
 .hol-row{{display:flex;justify-content:space-between;align-items:center;padding:.6rem 0;border-bottom:1px solid var(--border);gap:.5rem}}.hol-row:last-child{{border-bottom:none}}
 .hol-info strong{{font-size:.9rem}}.hol-date{{font-size:.75rem;color:var(--text2)}}.hol-actions{{display:flex;gap:.3rem;flex-shrink:0;flex-wrap:wrap}}.moon{{color:var(--warn)}}
 .bl-row{{display:flex;justify-content:space-between;align-items:center;padding:.5rem 0;border-bottom:1px solid var(--border)}}.bl-row:last-child{{border-bottom:none}}.bl-row div{{font-size:.85rem}}
+.wfh-row{{border-left:3px solid var(--wfh-color,#2196F3);padding-left:.5rem}}.wfh-badge{{background:var(--wfh-color,#2196F3);color:#fff;font-size:.65rem;font-weight:700;padding:.1rem .4rem;border-radius:3px;text-transform:uppercase;letter-spacing:.03em;margin-right:.3rem;vertical-align:middle}}.wfh-clock{{display:flex;gap:.5rem;margin-top:.5rem;align-items:center}}.wfh-clock .btn{{flex:1}}.wfh-clock-status{{font-size:.8rem;color:var(--text2);margin-top:.3rem}}
 .empty{{color:var(--text2);font-size:.85rem;font-style:italic}}.refresh{{text-align:center;padding:.5rem;font-size:.75rem;color:var(--text2)}}
 .cred-form .form-row{{margin-bottom:.5rem}}
 .cred-form label{{display:block;font-size:.75rem;font-weight:600;color:var(--text2);margin-bottom:.2rem;text-transform:uppercase;letter-spacing:.04em}}
@@ -1500,7 +1934,7 @@ body{{background:var(--bg);color:var(--text);font-family:-apple-system,system-ui
 {paused_banner}
 <div class="tab-bar">
   <button class="tab-btn active" data-tab="home">Home</button>
-  <button class="tab-btn" data-tab="holidays">Holidays &amp; Leave</button>
+  <button class="tab-btn" data-tab="holidays">Leave / WFH</button>
   <button class="tab-btn" data-tab="analytics">Analytics</button>
   <button class="tab-btn" data-tab="settings">Settings</button>
 </div><div class="container">
@@ -1514,6 +1948,7 @@ body{{background:var(--bg);color:var(--text);font-family:-apple-system,system-ui
       <div class="quick-actions">
         <a class="btn full {ti_btn}" style="background:var(--ok)" href="/action/timein-now" onclick="return confirm('Run Time-In now?')">Time In Now</a>
         <a class="btn full {to_btn}" style="background:var(--warn,#b8860b)" href="/action/timeout-now" onclick="return confirm('Run Time-Out now?')">Time Out Now</a>
+        <a class="btn full outline" data-no-ajax href="/action/sync-portal" onclick="return confirm('Check portal for today\'s attendance?')" style="margin-top:.5rem;font-size:.85rem">Sync from Portal</a>
       </div></div>
     {email_btn}
     {email_action}
@@ -1534,23 +1969,48 @@ body{{background:var(--bg);color:var(--text);font-family:-apple-system,system-ui
       <div><div class="card-title" style="margin-bottom:0">Quick Settings</div></div>
       <div style="display:flex;gap:.4rem;flex-wrap:wrap">
         <button class="btn sm outline" onclick="showTab('settings')">Credentials &amp; Settings</button>
-        <a class="btn sm outline" href="/action/sync-from-cloud" onclick="this.classList.add('ajax-loading')">Pull from Cloud</a>
         <a class="btn sm outline" href="/action/push-to-cloud" onclick="this.classList.add('ajax-loading')">Push to Cloud</a>
       </div>
     </div>
   </div>
   <div class="tab-panel" id="tab-holidays">
     <div class="card"><div class="card-title">Active Skips</div>{blackout_html}</div>
-    <div class="card"><div class="card-title">Add Leave / Travel</div>
+    <div class="card" id="wfh-clock-card" style="display:none">
+      <div class="card-title" style="color:var(--wfh-color,#2196F3)">WFH Clock</div>
+      <div id="wfh-clock-body">
+        <div class="wfh-clock">
+          <form action="/action/wfh-timein" method="POST" style="flex:1"><button type="submit" class="btn full" id="wfh-in-btn">Clock In</button></form>
+          <form action="/action/wfh-timeout" method="POST" style="flex:1"><button type="submit" class="btn full outline" id="wfh-out-btn">Clock Out</button></form>
+        </div>
+        <div class="wfh-clock-status" id="wfh-clock-status-text"></div>
+      </div>
+    </div>
+    <div class="card"><div class="card-title" style="color:var(--wfh-color,#2196F3)">Work From Home</div>
+      <form action="/action/add-wfh" method="POST" class="cred-form">
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:.4rem;margin-bottom:.4rem">
+          <div><label for="wfh_start">Start Date</label><input type="date" id="wfh_start" name="wfh_start" class="input" required></div>
+          <div><label for="wfh_end">End Date</label><input type="date" id="wfh_end" name="wfh_end" class="input" placeholder="Same as start if blank"></div>
+        </div>
+        <div style="margin-bottom:.4rem">
+          <label for="wfh_reason">Reason (optional)</label><input type="text" id="wfh_reason" name="wfh_reason" class="input" placeholder="Work from home">
+        </div>
+        <button type="submit" class="btn full" style="margin-top:.3rem;background:var(--wfh-color,#2196F3)">Mark WFH</button>
+      </form>
+      <p style="font-size:.75rem;color:var(--text2);margin-top:.6rem">WFH does NOT deduct from leave balance. Bot will skip attendance marking on WFH days.</p>
+    </div>
+    <div class="card"><div class="card-title">Add Leave</div>
       <form action="/action/add-leave" method="POST" class="cred-form">
         <div style="display:grid;grid-template-columns:1fr 1fr;gap:.4rem;margin-bottom:.4rem">
           <div><label for="leave_start">Start Date</label><input type="date" id="leave_start" name="leave_start" class="input" required></div>
           <div><label for="leave_end">End Date</label><input type="date" id="leave_end" name="leave_end" class="input" placeholder="Same as start if blank"></div>
         </div>
-        <div style="display:flex;gap:.4rem;align-items:end">
-          <div style="flex:1"><label for="leave_reason">Reason</label><input type="text" id="leave_reason" name="leave_reason" class="input" placeholder="e.g. Travel, Vacation"></div>
-          <button type="submit" class="btn sm">Add Leave</button>
-        </div></form></div>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:.4rem;margin-bottom:.4rem">
+          <div><label for="leave_type">Leave Type</label><select id="leave_type" name="leave_type" class="input"><option value="casual">Casual</option><option value="sick">Sick</option><option value="earned">Earned</option><option value="other">Other / Travel</option></select></div>
+          <div><label for="leave_reason">Reason (optional)</label><input type="text" id="leave_reason" name="leave_reason" class="input" placeholder="Auto-filled from type"></div>
+        </div>
+        <button type="submit" class="btn full" style="margin-top:.3rem">Add Leave</button>
+      </form>
+      <p style="font-size:.75rem;color:var(--text2);margin-top:.6rem">Balance is deducted automatically. Weekends and holidays in a range are excluded from the count.</p></div>
     <div class="card"><div class="card-title">Add Holiday</div>
       <form action="/action/add-holiday" method="POST" class="cred-form">
         <div style="display:grid;grid-template-columns:1fr 1fr;gap:.4rem;margin-bottom:.4rem">
@@ -1599,14 +2059,14 @@ body{{background:var(--bg);color:var(--text);font-family:-apple-system,system-ui
             <button type="button" class="btn sm outline" onclick="var p=document.getElementById('password');p.type=p.type==='password'?'text':'password';this.textContent=p.type==='password'?'Show':'Hide'">Show</button></div></div>
         <button type="submit" class="btn full" style="margin-top:.5rem">Save Credentials</button></form>
       <p style="font-size:.75rem;color:var(--text2);margin-top:.6rem">These credentials are used by the bot to log in to the Time In / Time Out page.</p></div>
-    <div class="card"><div class="card-title">Portal Login (one.aku.edu)</div>
+    <details class="card collapsible"><summary class="card-title collapsible-title">Portal Login (one.aku.edu)</summary>
       <form action="/action/update-portal" method="POST" class="cred-form">
         <div class="form-row"><label for="portal_user">Portal Username</label><input type="text" id="portal_user" name="portal_user" value="{portal_user}" class="input" placeholder="aly.jafferani"></div>
         <div class="form-row"><label for="portal_pass">Portal Password</label>
           <div class="pw-wrap"><input type="password" id="portal_pass" name="portal_pass" value="{portal_pass}" class="input" placeholder="Enter a new password">
             <button type="button" class="btn sm outline" onclick="var p=document.getElementById('portal_pass');p.type=p.type==='password'?'text':'password';this.textContent=p.type==='password'?'Show':'Hide'">Show</button></div></div>
         <button type="submit" class="btn full" style="margin-top:.5rem">Save Portal Credentials</button></form>
-      <p style="font-size:.75rem;color:var(--text2);margin-top:.6rem">Used to log in to one.aku.edu for remote attendance marking. Username is without @aku.edu.</p></div>
+      <p style="font-size:.75rem;color:var(--text2);margin-top:.6rem">Used to log in to one.aku.edu for remote attendance marking. Username is without @aku.edu.</p></details>
     <div class="card"><div class="card-title">Randomized Time Windows</div>
       <p style="font-size:.8rem;color:var(--text2);margin-bottom:.75rem">The bot picks a random time within each range. 85% of the time it lands in the first 75% of the window (primary zone), keeping it natural.</p>
       <form action="/action/update-windows" method="POST" class="cred-form">
@@ -1646,7 +2106,7 @@ body{{background:var(--bg);color:var(--text);font-family:-apple-system,system-ui
         <button type="submit" class="btn full" style="margin-top:.5rem">Save Leave Balance</button>
       </form>
       <p style="font-size:.75rem;color:var(--text2);margin-top:.6rem">Set your current remaining leaves. The bot deducts when you mark leave days.</p></div>
-    <div class="card"><div class="card-title">Cloud Sync (GitHub)</div>
+    <details class="card collapsible"><summary class="card-title collapsible-title">Cloud Sync (GitHub)</summary>
       <p style="font-size:.8rem;color:var(--text2);margin-bottom:.5rem">Connect GitHub for non-secret settings, status, and fallback timing. Attendance and portal credentials remain local.</p>
       <form action="/action/update-cloud-sync" method="POST" class="cred-form">
         <div class="form-row"><label for="gh_repo">Repo (owner/name)</label><input type="text" id="gh_repo" name="gh_repo" value="{gh_repo}" class="input" placeholder="username/attendance-bot"></div>
@@ -1654,7 +2114,7 @@ body{{background:var(--bg);color:var(--text);font-family:-apple-system,system-ui
           <div class="pw-wrap"><input type="password" id="gh_token" name="gh_token" value="{gh_token}" class="input" placeholder="Leave blank to keep the saved token">
             <button type="button" class="btn sm outline" onclick="var p=document.getElementById('gh_token');p.type=p.type==='password'?'text':'password';this.textContent=p.type==='password'?'Show':'Hide'">Show</button></div></div>
         <button type="submit" class="btn full" style="margin-top:.5rem">Save Cloud Sync</button>
-        <a class="btn full outline" href="/action/test-cloud-sync" style="margin-top:.3rem;display:block;text-align:center">Test Sync Now</a></form></div>
+        <a class="btn full outline" href="/action/test-cloud-sync" style="margin-top:.3rem;display:block;text-align:center">Test Sync Now</a></form></details>
     <div class="card"><div class="card-title">Notification Preferences</div>
       <p style="font-size:.8rem;color:var(--text2);margin-bottom:.5rem">Choose which notifications to receive on your phone.</p>
       <form action="/action/update-notifications" method="POST" class="cred-form">
@@ -1706,6 +2166,7 @@ body{{background:var(--bg);color:var(--text);font-family:-apple-system,system-ui
     if(panel){{panel.classList.add('active')}}
     document.querySelectorAll('.tab-btn[data-tab="'+id+'"]').forEach(function(b){{b.classList.add('active')}});
     sessionStorage.setItem('activeTab',id);
+    if(id==='holidays'){{loadWfhClock();}}
   }}
   showTab(saved);
   document.querySelectorAll('.tab-btn').forEach(function(btn){{
@@ -1824,16 +2285,21 @@ body{{background:var(--bg);color:var(--text);font-family:-apple-system,system-ui
     if(currentView==='monthly'){{renderMonthly(aggregateMonthly(recs));return}}
   }}
   function renderDaily(recs){{
-    var worked=recs.filter(function(r){{return r.hours>0}});
+    var officeWorked=recs.filter(function(r){{return r.type==='workday'&&r.hours>0}});
+    var wfhWorked=recs.filter(function(r){{return r.type==='wfh'&&r.hours>0}});
+    var worked=officeWorked.concat(wfhWorked);
+    var wfhAll=recs.filter(function(r){{return r.type==='wfh'}}).length;
     var leaves=recs.filter(function(r){{return r.type==='leave'}}).length;
     var holidays=recs.filter(function(r){{return r.type==='holiday'}}).length;
     var missing=recs.filter(function(r){{return r.type==='missing'}}).length;
     var totalH=worked.reduce(function(a,r){{return a+r.hours}},0);
     var avgH=worked.length?totalH/worked.length:0;
     var totalOver=worked.reduce(function(a,r){{var d=r.hours-TARGET;return a+(d>0?d:0)}},0);
+    var daysLabel=worked.length+(wfhWorked.length>0?' (Office: '+officeWorked.length+', WFH: '+wfhWorked.length+')':'');
     var cards='<div class="summary-box"><div class="val">'+worked.length+'</div><div class="lbl">Days Worked</div></div>'
       +'<div class="summary-box"><div class="val">'+avgH.toFixed(1)+'h</div><div class="lbl">Avg Daily</div></div>'
       +'<div class="summary-box"><div class="val">'+totalOver.toFixed(1)+'h</div><div class="lbl">Total Overtime</div></div>';
+    if(wfhAll>0)cards+='<div class="summary-box"><div class="val" style="color:var(--wfh-color,#2196F3)">'+wfhAll+'</div><div class="lbl">WFH Days</div></div>';
     if(leaves>0)cards+='<div class="summary-box"><div class="val" style="color:#b45309">'+leaves+'</div><div class="lbl">Leave Days</div></div>';
     if(holidays>0)cards+='<div class="summary-box"><div class="val" style="color:var(--primary)">'+holidays+'</div><div class="lbl">Holidays</div></div>';
     if(missing>0)cards+='<div class="summary-box"><div class="val" style="color:var(--fail)">'+missing+'</div><div class="lbl">Missing</div></div>';
@@ -1848,6 +2314,7 @@ body{{background:var(--bg);color:var(--text);font-family:-apple-system,system-ui
       if(tp==='weekend'||tp==='future')return;
       if(tp==='holiday'){{barsHtml+='<div class="chart-bar-col"><div class="chart-bar" style="height:3px;background:var(--primary);width:100%"></div><div class="chart-lbl" style="color:var(--primary);font-size:.45rem">H</div></div>';return}}
       if(tp==='leave'){{barsHtml+='<div class="chart-bar-col"><div class="chart-bar" style="height:3px;background:#b45309;width:100%"></div><div class="chart-lbl" style="color:#b45309;font-size:.45rem">L</div></div>';return}}
+      if(tp==='wfh'){{if(r.hours>0){{var wpct=(r.hours/maxH*100).toFixed(1);barsHtml+='<div class="chart-bar-col"><div class="chart-bar" style="height:'+wpct+'%;background:var(--wfh-color,#2196F3);width:100%"></div><div class="chart-lbl" style="color:var(--wfh-color,#2196F3)">W</div></div>'}}else{{barsHtml+='<div class="chart-bar-col"><div class="chart-bar" style="height:3px;background:var(--wfh-color,#2196F3);width:100%"></div><div class="chart-lbl" style="color:var(--wfh-color,#2196F3);font-size:.45rem">W</div></div>'}}return}}
       if(r.hours<=0){{barsHtml+='<div class="chart-bar-col"><div class="chart-bar" style="height:0;background:var(--fail);min-height:2px;width:100%"></div><div class="chart-lbl" style="color:var(--fail)">'+r.day+'</div></div>';return}}
       var pct=(r.hours/maxH*100).toFixed(1);
       var col=r.hours>=TARGET?'var(--ok)':'var(--fail)';
@@ -1864,6 +2331,13 @@ body{{background:var(--bg);color:var(--text);font-family:-apple-system,system-ui
         tbody+='<tr style="color:var(--primary);background:rgba(59,130,246,.06)"><td>'+r.date+'</td><td>'+r.day+'</td><td colspan="3" style="text-align:center;font-weight:600">'+r.label+'</td><td></td></tr>';
       }}else if(tp==='leave'){{
         tbody+='<tr style="color:#b45309;background:rgba(234,179,8,.06)"><td>'+r.date+'</td><td>'+r.day+'</td><td colspan="3" style="text-align:center;font-weight:600">'+r.label+'</td><td></td></tr>';
+      }}else if(tp==='wfh'){{
+        if(r.hours>0){{
+          var diff=r.hours-TARGET;var cls=diff>=0?'over':'under';var sign=diff>=0?'+':'';
+          tbody+='<tr style="color:var(--wfh-color,#2196F3);background:rgba(33,150,243,.06)"><td>'+r.date+'</td><td>'+r.day+'</td><td>'+r.timein+'</td><td>'+r.timeout+'</td><td>'+r.hours.toFixed(2)+'</td><td class="'+cls+'">'+sign+diff.toFixed(2)+'h</td></tr>';
+        }}else{{
+          tbody+='<tr style="color:var(--wfh-color,#2196F3);background:rgba(33,150,243,.06)"><td>'+r.date+'</td><td>'+r.day+'</td><td colspan="3" style="text-align:center;font-weight:600">'+r.label+'</td><td></td></tr>';
+        }}
       }}else if(tp==='future'){{
         tbody+='<tr style="color:var(--text2);opacity:.4"><td>'+r.date+'</td><td>'+r.day+'</td><td colspan="3" style="text-align:center;font-style:italic">Upcoming</td><td></td></tr>';
       }}else if(tp==='missing'){{
@@ -2075,6 +2549,25 @@ body{{background:var(--bg);color:var(--text);font-family:-apple-system,system-ui
   }}
   window.togglePause=togglePause;
 }})();
+function loadWfhClock() {{
+  fetch('/api/wfh-clock-status').then(function(r){{return r.json()}}).then(function(d) {{
+    var card = document.getElementById('wfh-clock-card');
+    if (!d.is_wfh_today) {{ card.style.display = 'none'; return; }}
+    card.style.display = '';
+    var inBtn = document.getElementById('wfh-in-btn');
+    var outBtn = document.getElementById('wfh-out-btn');
+    var status = document.getElementById('wfh-clock-status-text');
+    if (d.clocked_in) {{
+      inBtn.disabled = true; inBtn.textContent = 'Clocked In ' + d.clocked_in;
+      outBtn.disabled = !!d.clocked_out;
+      if (d.clocked_out) {{ outBtn.textContent = 'Clocked Out ' + d.clocked_out; }}
+    }}
+    var parts = [];
+    if (d.clocked_in) {{ parts.push('In: ' + d.clocked_in); }}
+    if (d.clocked_out) {{ parts.push('Out: ' + d.clocked_out); }}
+    status.textContent = parts.length ? parts.join(' | ') : 'Not clocked in yet';
+  }}).catch(function(){{}});
+}}
 </script>
 </body></html>"""
 

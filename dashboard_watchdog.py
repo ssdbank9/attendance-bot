@@ -173,10 +173,11 @@ def launch(port):
     out.write(f"\n--- launched by watchdog {pk_now():%Y-%m-%d %H:%M:%S} ---\n")
     subprocess.Popen(
         [interpreter(), "-u", str(BASE_DIR / "dashboard.py")],
+        stdin=subprocess.DEVNULL,
         stdout=out,
         stderr=subprocess.STDOUT,
         cwd=str(BASE_DIR),
-        creationflags=subprocess.CREATE_NO_WINDOW | subprocess.DETACHED_PROCESS,
+        creationflags=subprocess.CREATE_NO_WINDOW,
     )
     log.info("Dashboard relaunched on port %s", port)
 

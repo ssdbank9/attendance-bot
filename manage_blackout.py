@@ -9,6 +9,12 @@ Usage:
     python manage_blackout.py cancel-range 2026-09-01 2026-09-05
     python manage_blackout.py list
     python manage_blackout.py clear-past
+
+    python manage_blackout.py wfh tomorrow "Remote work"
+    python manage_blackout.py wfh 2026-09-03 "Working from home"
+    python manage_blackout.py wfh-range 2026-09-01 2026-09-05 "WFH week"
+    python manage_blackout.py cancel-wfh 2026-09-03
+    python manage_blackout.py cancel-wfh-range 2026-09-01 2026-09-05
 """
 
 import json
@@ -131,6 +137,81 @@ def cancel_range(start_input, end_input):
         print(f"No range found matching {start} to {end}")
 
 
+def wfh_date(date_input, reason="Work from home"):
+    date_str = resolve_date(date_input)
+    data = load()
+    if "wfh" not in data:
+        data["wfh"] = []
+    for d in data["wfh"]:
+        if d["date"] == date_str:
+            print(f"Already marked WFH: {date_str}")
+            return
+    data["wfh"].append({
+        "date": date_str,
+        "reason": reason,
+        "added": pk_now().strftime("%Y-%m-%d %H:%M"),
+    })
+    data["wfh"].sort(key=lambda d: d["date"])
+    save(data)
+    day_name = datetime.strptime(date_str, "%Y-%m-%d").strftime("%A")
+    print(f"WFH: {date_str} ({day_name}) - {reason}")
+
+
+def wfh_range(start_input, end_input, reason="Work from home"):
+    start = resolve_date(start_input)
+    end = resolve_date(end_input)
+    if start > end:
+        start, end = end, start
+    data = load()
+    if "wfh_ranges" not in data:
+        data["wfh_ranges"] = []
+    for r in data["wfh_ranges"]:
+        if r["start"] == start and r["end"] == end:
+            print(f"WFH range already exists: {start} to {end}")
+            return
+    data["wfh_ranges"].append({
+        "start": start,
+        "end": end,
+        "reason": reason,
+        "added": pk_now().strftime("%Y-%m-%d %H:%M"),
+    })
+    data["wfh_ranges"].sort(key=lambda r: r["start"])
+    save(data)
+    s_day = datetime.strptime(start, "%Y-%m-%d").strftime("%A")
+    e_day = datetime.strptime(end, "%Y-%m-%d").strftime("%A")
+    num_days = (datetime.strptime(end, "%Y-%m-%d") - datetime.strptime(start, "%Y-%m-%d")).days + 1
+    print(f"WFH RANGE: {start} ({s_day}) to {end} ({e_day}) [{num_days} days] - {reason}")
+
+
+def cancel_wfh_date(date_input):
+    date_str = resolve_date(date_input)
+    data = load()
+    if "wfh" not in data:
+        data["wfh"] = []
+    before = len(data["wfh"])
+    data["wfh"] = [d for d in data["wfh"] if d["date"] != date_str]
+    if len(data["wfh"]) < before:
+        save(data)
+        print(f"CANCELLED WFH for {date_str}")
+    else:
+        print(f"No WFH entry found for {date_str}")
+
+
+def cancel_wfh_range(start_input, end_input):
+    start = resolve_date(start_input)
+    end = resolve_date(end_input)
+    data = load()
+    if "wfh_ranges" not in data:
+        data["wfh_ranges"] = []
+    before = len(data["wfh_ranges"])
+    data["wfh_ranges"] = [r for r in data["wfh_ranges"] if not (r["start"] == start and r["end"] == end)]
+    if len(data["wfh_ranges"]) < before:
+        save(data)
+        print(f"CANCELLED WFH range {start} to {end}")
+    else:
+        print(f"No WFH range found matching {start} to {end}")
+
+
 def list_blackouts():
     data = load()
     today = pk_now().date()
@@ -158,6 +239,28 @@ def list_blackouts():
             num = (e - s).days + 1
             print(f"  {r['start']} to {r['end']} [{num} days] - {r.get('reason', '')}")
 
+    active_wfh = [d for d in data.get("wfh", []) if datetime.strptime(d["date"], "%Y-%m-%d").date() >= today]
+    active_wfh_ranges = [r for r in data.get("wfh_ranges", []) if datetime.strptime(r["end"], "%Y-%m-%d").date() >= today]
+
+    if active_wfh:
+        has_any = True
+        print("WFH days:")
+        for d in active_wfh:
+            dt = datetime.strptime(d["date"], "%Y-%m-%d").date()
+            diff = (dt - today).days
+            day_name = dt.strftime("%A")
+            when = "TODAY" if diff == 0 else f"in {diff}d" if diff > 0 else "past"
+            print(f"  {d['date']} ({day_name}) [{when}] - {d.get('reason', 'WFH')}")
+
+    if active_wfh_ranges:
+        has_any = True
+        print("WFH ranges:")
+        for r in active_wfh_ranges:
+            s = datetime.strptime(r["start"], "%Y-%m-%d").date()
+            e = datetime.strptime(r["end"], "%Y-%m-%d").date()
+            num = (e - s).days + 1
+            print(f"  {r['start']} to {r['end']} [{num} days] - {r.get('reason', 'WFH')}")
+
     if not has_any:
         print("No active blackouts. Bot will run every weekday (except holidays).")
 
@@ -167,8 +270,26 @@ def list_blackouts():
         day = today + timedelta(days=i)
         if day.weekday() >= 5:
             continue
-        blacked, reason = is_blacked_out(day.strftime("%Y-%m-%d"), data)
-        status = f"SKIPPED ({reason})" if blacked else "will run"
+        ds = day.strftime("%Y-%m-%d")
+        blacked, reason = is_blacked_out(ds, data)
+        wfh = False
+        for d in data.get("wfh", []):
+            if d["date"] == ds:
+                wfh = True
+                reason = d.get("reason", "WFH")
+                break
+        if not wfh:
+            for r in data.get("wfh_ranges", []):
+                if r.get("start", "") <= ds <= r.get("end", ""):
+                    wfh = True
+                    reason = r.get("reason", "WFH")
+                    break
+        if wfh:
+            status = f"WFH ({reason})"
+        elif blacked:
+            status = f"SKIPPED ({reason})"
+        else:
+            status = "will run"
         marker = " << TODAY" if i == 0 else ""
         print(f"  {day.strftime('%Y-%m-%d')} ({day.strftime('%A')}) - {status}{marker}")
         count += 1
@@ -179,11 +300,15 @@ def list_blackouts():
 def clear_past():
     data = load()
     today = pk_now().strftime("%Y-%m-%d")
-    before_d = len(data["dates"])
-    before_r = len(data["ranges"])
-    data["dates"] = [d for d in data["dates"] if d["date"] >= today]
-    data["ranges"] = [r for r in data["ranges"] if r["end"] >= today]
-    removed = (before_d - len(data["dates"])) + (before_r - len(data["ranges"]))
+    total_before = len(data.get("dates", [])) + len(data.get("ranges", [])) + len(data.get("wfh", [])) + len(data.get("wfh_ranges", []))
+    data["dates"] = [d for d in data.get("dates", []) if d["date"] >= today]
+    data["ranges"] = [r for r in data.get("ranges", []) if r["end"] >= today]
+    if "wfh" in data:
+        data["wfh"] = [d for d in data["wfh"] if d["date"] >= today]
+    if "wfh_ranges" in data:
+        data["wfh_ranges"] = [r for r in data["wfh_ranges"] if r["end"] >= today]
+    total_after = len(data.get("dates", [])) + len(data.get("ranges", [])) + len(data.get("wfh", [])) + len(data.get("wfh_ranges", []))
+    removed = total_before - total_after
     save(data)
     print(f"Cleared {removed} past entries.")
 
@@ -207,6 +332,16 @@ def main():
         cancel_range(sys.argv[2], sys.argv[3])
     elif cmd == "list":
         list_blackouts()
+    elif cmd == "wfh" and len(sys.argv) >= 3:
+        reason = sys.argv[3] if len(sys.argv) > 3 else "Work from home"
+        wfh_date(sys.argv[2], reason)
+    elif cmd == "wfh-range" and len(sys.argv) >= 4:
+        reason = sys.argv[4] if len(sys.argv) > 4 else "Work from home"
+        wfh_range(sys.argv[2], sys.argv[3], reason)
+    elif cmd == "cancel-wfh" and len(sys.argv) >= 3:
+        cancel_wfh_date(sys.argv[2])
+    elif cmd == "cancel-wfh-range" and len(sys.argv) >= 4:
+        cancel_wfh_range(sys.argv[2], sys.argv[3])
     elif cmd == "clear-past":
         clear_past()
     else:

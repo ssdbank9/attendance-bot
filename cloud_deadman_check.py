@@ -126,6 +126,17 @@ def is_blacked_out(day):
     return None
 
 
+def is_wfh(day):
+    data = load_json(BLACKOUT_FILE)
+    for d in data.get("wfh", []):
+        if d.get("date") == day:
+            return d.get("reason", "Work from home")
+    for r in data.get("wfh_ranges", []):
+        if r.get("start", "") <= day <= r.get("end", ""):
+            return r.get("reason", "Work from home")
+    return None
+
+
 def is_working_weekend(day):
     return day in load_json(BLACKOUT_FILE).get("working_weekends", [])
 
@@ -290,6 +301,10 @@ def verdict(today, day):
     blackout = is_blacked_out(day)
     if blackout:
         return False, f"blackout/leave ({blackout})", pause_note
+
+    wfh = is_wfh(day)
+    if wfh:
+        return False, f"WFH day — no portal attendance expected ({wfh})", pause_note
 
     recorded, status_date = timein_recorded(day)
     if recorded:

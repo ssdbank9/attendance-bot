@@ -204,6 +204,20 @@ def is_blacked_out(today_str):
     return False, None
 
 
+def is_wfh(today_str):
+    if not BLACKOUT_FILE.exists():
+        return False, None
+    with open(BLACKOUT_FILE, "r") as f:
+        data = json.load(f)
+    for d in data.get("wfh", []):
+        if d["date"] == today_str:
+            return True, d.get("reason", "Work from home")
+    for r in data.get("wfh_ranges", []):
+        if r["start"] <= today_str <= r["end"]:
+            return True, r.get("reason", "Work from home")
+    return False, None
+
+
 def is_working_weekend(date_str):
     if not BLACKOUT_FILE.exists():
         return False
@@ -268,6 +282,14 @@ def should_run_today(mode):
         log.info("Skipping - blackout: %s", reason)
         write_status(mode, "skipped", f"Blackout: {reason}")
         notify_skip(mode, reason)
+        return False
+
+    wfh, wfh_reason = is_wfh(today_str)
+    if wfh:
+        log.info("Skipping - WFH: %s", wfh_reason)
+        write_status(mode, "skipped", f"WFH: {wfh_reason}")
+        from notify import notify_wfh
+        notify_wfh(mode, wfh_reason)
         return False
 
     return True
@@ -625,7 +647,102 @@ def run_and_record(mode, retry_cfg, catchup_date=None):
     write_status(mode, "failed", msg, date_str=catchup_date)
     notify_failure(mode, retry_cfg["max_attempts"])
     log.info("=== Done (FAILED) ===")
+
+    # Schedule a portal recheck in 30 minutes to detect manual attendance
+    if mode in ("timein", "timeout"):
+        try:
+            recheck_target = pk_now() + timedelta(minutes=30)
+            task_name = "TimeInBot_Recheck"
+            script = str(Path(__file__).resolve())
+            exe = gui_executable()
+            _tz = recheck_target.replace(tzinfo=PKT).strftime("%z")
+            tz_str = f"{_tz[:3]}:{_tz[3:]}"
+            ps = f"""$ErrorActionPreference = 'Stop'
+$a = New-ScheduledTaskAction -Execute '{exe}' -Argument '"{script}" recheck' -WorkingDirectory '{BASE_DIR}'
+$t = New-ScheduledTaskTrigger -Once -At ([datetimeoffset]'{recheck_target:%Y-%m-%dT%H:%M:%S}{tz_str}').LocalDateTime
+$t.EndBoundary = '{(recheck_target + timedelta(hours=1)):%Y-%m-%dT%H:%M:%S}{tz_str}'
+$s = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -StartWhenAvailable -ExecutionTimeLimit (New-TimeSpan -Minutes 10) -DeleteExpiredTaskAfter (New-TimeSpan -Minutes 5)
+$s.Hidden = $true
+Register-ScheduledTask -TaskName '{task_name}' -Action $a -Trigger $t -Settings $s -Force | Out-Null
+"""
+            subprocess.run(
+                ["powershell", "-NoProfile", "-NonInteractive", "-Command", ps],
+                capture_output=True, text=True, timeout=30,
+                creationflags=NO_WINDOW,
+            )
+            log.info("Scheduled portal recheck at %s", recheck_target.strftime("%H:%M:%S"))
+        except Exception as e:
+            log.warning("Could not schedule recheck: %s", e)
+
     return False
+
+
+def recheck_portal(mode):
+    """Re-check the AKU portal after a prior failure. If the user marked
+    attendance manually the entry is recorded as preexisting; if the portal
+    had not been marked yet the API performs the action now (recorded as bot).
+
+    SAFETY: The AKU API has no read-only check - calling it PERFORMS the
+    action if it hasn't been done. Only call when a FAILED record exists
+    for this mode today."""
+    config = load_config()
+    creds = config["credentials"]
+    label = LABELS[mode]
+
+    log.info("=== Portal recheck for %s ===", label)
+
+    done, done_time = already_done(mode)
+    if done:
+        log.info("Already recorded as success at %s - nothing to recheck", done_time)
+        return True
+
+    today = pk_now().strftime("%Y-%m-%d")
+    latest = db.get_latest(mode, today)
+    if not latest or latest["status"] != "failed":
+        log.info("No failed record for %s today - skipping recheck (API would perform the action)", label)
+        return False
+
+    attempted_at = pk_now()
+    try:
+        ok, message = call_aku_api(mode, creds["user_id"], creds["password"])
+    except Exception as e:
+        log.warning("Recheck API call failed: %s", e)
+        return False
+
+    if not ok:
+        log.info("Portal recheck: %s not found on portal", label)
+        return False
+
+    field = "In" if mode == "timein" else "Out"
+    portal_time = parse_aku_time(message, field)
+    if portal_time:
+        if portal_entry_predates_attempt(message, field, attempted_at):
+            origin = "preexisting"
+            msg = f"{label} found on portal at {portal_time} (manual entry detected by recheck)"
+            write_status(mode, "success", msg, action_time=None,
+                         date_str=None, action_origin="preexisting",
+                         observed_time=portal_time)
+        else:
+            origin = "bot"
+            msg = f"{label} marked at {portal_time} (completed by recheck)"
+            write_status(mode, "success", msg, action_time=portal_time,
+                         date_str=None, action_origin="bot")
+        log.info(msg)
+        try:
+            notify(msg, title=f"{label} Synced", tags="check")
+        except Exception:
+            pass
+        return True
+    else:
+        msg = f"{label}: portal confirmed but time not parsed (recheck)"
+        log.warning("Could not parse time from API response: %s", message[:200])
+        write_status(mode, "success", msg, action_time=None,
+                     date_str=None, action_origin="bot")
+        try:
+            notify(msg, title=f"{label} Synced (no time)", tags="warning")
+        except Exception:
+            pass
+        return True
 
 
 # A long time.sleep() is the reason attendance kept landing late. WakeToRun on
@@ -829,6 +946,13 @@ def main():
     # Fired by the one-shot task at the randomized instant: act now, but
     # keep every guard the inline path would have re-run after waking.
     scheduled_flag = "--scheduled" in sys.argv
+    if mode == "recheck":
+        log.info("=== Portal recheck started ===")
+        recheck_portal("timein")
+        recheck_portal("timeout")
+        log.info("=== Portal recheck done ===")
+        return
+
     if mode not in BUTTON_IDS:
         print(f"Usage: python {Path(__file__).name} [timein|timeout] [--now|--fallback]")
         sys.exit(1)

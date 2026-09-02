@@ -162,6 +162,23 @@ def notify_skip(mode, reason):
         ),
     )
 
+def notify_wfh(mode, reason):
+    if not pref_enabled("skip_day"):
+        return
+    label = "Time-In" if mode == "timein" else "Time-Out"
+    dashboard = get_dashboard_url()
+    notify(
+        f"{label} skipped - {reason}. Log your WFH hours on the dashboard.",
+        title="Working From Home",
+        tags="house",
+        click=f"{dashboard}/?tab=holidays",
+        actions=(
+            f"view, Log WFH Hours, {dashboard}/?tab=holidays; "
+            f"view, Cancel WFH, {dashboard}/action/cancel-wfh-today"
+        ),
+    )
+
+
 
 def notify_window_missed(mode, cutoff):
     """The window closed before the bot could act, so it marked nothing.
@@ -230,20 +247,36 @@ def notify_failure(mode, attempts):
     )
 
 
-def notify_tomorrow(day_name, date_str):
+def notify_tomorrow(day_name, date_str, snoozed=False):
+    if not pref_enabled("tomorrow_plan"):
+        return
+    dashboard = get_dashboard_url()
+    tag = "calendar" if not snoozed else "calendar,alarm_clock"
+    title = "Tomorrow's Plan" if not snoozed else "Tomorrow's Plan (Snoozed)"
+    notify(
+        f"Bot will run tomorrow ({day_name} {date_str}). Tap to skip.",
+        title=title,
+        tags=tag,
+        click=f"{dashboard}/?tab=home",
+        actions=(
+            f"view, Skip Tomorrow, {dashboard}/action/skip-tomorrow; "
+            f"http, Snooze 2h, {dashboard}/action/snooze-tomorrow, method=GET; "
+            f"http, Ignore, {dashboard}/action/ignore-tomorrow, method=GET"
+        ),
+    )
+
+def notify_tomorrow_wfh(day_name, reason):
     if not pref_enabled("tomorrow_plan"):
         return
     dashboard = get_dashboard_url()
     notify(
-        f"Bot will run tomorrow ({day_name} {date_str}). Tap to skip.",
-        title="Tomorrow's Plan",
-        tags="calendar",
-        click=f"{dashboard}/?tab=home",
-        actions=(
-            f"view, Skip Tomorrow, {dashboard}/action/skip-tomorrow; "
-            f"view, Dashboard, {dashboard}/?tab=home"
-        ),
+        f"Working from home tomorrow ({day_name}) - {reason}. Bot will NOT run.",
+        title="WFH Tomorrow",
+        tags="house",
+        click=f"{dashboard}/?tab=holidays",
+        actions=f"view, Cancel WFH, {dashboard}/action/cancel-wfh-tomorrow; view, Dashboard, {dashboard}/?tab=home",
     )
+
 
 
 def notify_tomorrow_skipped(day_name, reason):

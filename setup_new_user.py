@@ -50,9 +50,14 @@ def setup_config():
     password = get_input("  Password")
 
     print("\n--- Portal Login (one.aku.edu) ---")
-    print("  Drives the saved portal page for the Selenium fallback.")
-    portal_user = get_input("  Portal username (e.g. firstname.lastname)")
-    portal_pass = get_input("  Portal password")
+    print("  Optional. Only needed for the Selenium fallback (Edge browser).")
+    print("  The bot uses the direct API by default. Press Enter to skip.")
+    portal_user = input("  Portal username (e.g. firstname.lastname) [skip]: ").strip()
+    portal_pass = ""
+    if portal_user:
+        portal_pass = get_input("  Portal password")
+    else:
+        print("  Skipped. Bot will use API-only mode.")
 
     print("\n--- Time Windows (press Enter for defaults) ---")
     ti_start = get_input("  Time-In window start (HH:MM)", "08:45")
@@ -92,7 +97,7 @@ def setup_config():
             "host": "0.0.0.0",
         },
         "portal": {
-            "enabled": True,
+            "enabled": bool(portal_user),
             "url": "https://one.aku.edu/Pages/homepk.aspx",
             "username": portal_user,
             "password": portal_pass,
@@ -130,7 +135,8 @@ def setup_json_files():
     blackout_path = BASE_DIR / "blackout.json"
     if not blackout_path.exists():
         with open(blackout_path, "w") as f:
-            json.dump({"dates": [], "ranges": []}, f, indent=2)
+            json.dump({"dates": [], "ranges": [], "working_weekends": [],
+                        "wfh": [], "wfh_ranges": []}, f, indent=2)
         print("  Created blackout.json")
 
     status_path = BASE_DIR / "timein_status.json"
@@ -138,6 +144,30 @@ def setup_json_files():
         with open(status_path, "w") as f:
             json.dump({}, f, indent=2)
         print("  Created timein_status.json")
+
+    notif_path = BASE_DIR / "notification_prefs.json"
+    if not notif_path.exists():
+        with open(notif_path, "w") as f:
+            json.dump({"preferences": {
+                "timein_success": True, "timeout_success": True,
+                "skip_day": True, "failure": True,
+                "tomorrow_plan": True, "tomorrow_holiday": True,
+                "holiday_reminder": True, "deadman_switch": True,
+                "holiday_change": True,
+            }}, f, indent=2)
+        print("  Created notification_prefs.json")
+
+    lb_path = BASE_DIR / "leave_balance.json"
+    if not lb_path.exists():
+        with open(lb_path, "w") as f:
+            json.dump({"casual": 0, "sick": 0, "annual": 0, "used": {}}, f, indent=2)
+        print("  Created leave_balance.json")
+
+    history_path = BASE_DIR / "timein_history.json"
+    if not history_path.exists():
+        with open(history_path, "w") as f:
+            json.dump({"records": {}}, f, indent=2)
+        print("  Created timein_history.json")
 
     logs_dir = BASE_DIR / "timein_logs"
     logs_dir.mkdir(exist_ok=True)
@@ -255,7 +285,7 @@ def create_scheduled_tasks():
         # 30 min, not 5. health() retries before declaring death, so a probe
         # landing inside a Modern Standby transition no longer causes a needless
         # relaunch - which is what most of the old 5-minute wakeups were doing.
-        "-RepetitionInterval (New-TimeSpan -Minutes 30) "
+        "-RepetitionInterval (New-TimeSpan -Minutes 45) "
         "-RepetitionDuration (New-TimeSpan -Days 1)).Repetition\n"
         "$logon = New-ScheduledTaskTrigger -AtLogOn"
     )
@@ -328,6 +358,11 @@ def print_ntfy_instructions(config):
   5. TEST IT  (careful - these mark REAL attendance immediately)
      python timein_bot.py timein --now
      python timein_bot.py timeout --now
+
+  HOW IT WORKS
+     The bot calls the AKU API directly (no browser needed). Selenium
+     with Edge is an automatic fallback if the API ever fails. You do
+     NOT need to install Edge WebDriver unless the API stops working.
 
   REQUIREMENTS
      * You must be on the AKU network. portalservice.aku.edu is a private
