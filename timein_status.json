@@ -8,11 +8,11 @@
     "observed_time": "09:10:00"
   },
   "timeout": {
-    "date": "2026-09-01",
+    "date": "2026-09-02",
     "status": "success",
-    "message": "Time-Out marked at 20:07:11",
-    "timestamp": "2026-09-01 20:07:11",
-    "action_origin": "bot",
-    "action_time": "20:07:11"
+    "message": "Time-Out found on portal at 16:31:00 (detected by recheck)",
+    "timestamp": "2026-09-02 16:31:05",
+    "action_origin": "preexisting",
+    "observed_time": "16:31:00"
   }
 }
