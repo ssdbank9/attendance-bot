@@ -260,8 +260,7 @@ def notify_tomorrow(day_name, date_str, snoozed=False):
         click=f"{dashboard}/?tab=home",
         actions=(
             f"view, Skip Tomorrow, {dashboard}/action/skip-tomorrow; "
-            f"http, Snooze 2h, {dashboard}/action/snooze-tomorrow, method=GET; "
-            f"http, Ignore, {dashboard}/action/ignore-tomorrow, method=GET"
+            f"view, Snooze 2h, {dashboard}/action/snooze-tomorrow"
         ),
     )
 

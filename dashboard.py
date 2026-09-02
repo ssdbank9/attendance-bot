@@ -514,8 +514,7 @@ def action_snooze_tomorrow():
         click="{dash}/?tab=home".format(dash=dashboard),
         actions=(
             "view, Skip Tomorrow, {dash}/action/skip-tomorrow; "
-            "http, Snooze 2h, {dash}/action/snooze-tomorrow, method=GET; "
-            "http, Ignore, {dash}/action/ignore-tomorrow, method=GET"
+            "view, Snooze 2h, {dash}/action/snooze-tomorrow"
         ).format(dash=dashboard),
         delay="2h",
     )
