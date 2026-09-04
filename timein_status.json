@@ -1,10 +1,11 @@
 {
   "timein": {
     "date": "2026-09-04",
-    "status": "skipped",
-    "message": "Time-In window closed at 09:20 - not marking at 09:21",
-    "timestamp": "2026-09-04 09:21:49",
-    "action_origin": "bot"
+    "status": "success",
+    "message": "Time-In was already present before this bot acted (portal reported 09:16:00)",
+    "timestamp": "2026-09-04 12:27:53",
+    "action_origin": "preexisting",
+    "observed_time": "09:16:00"
   },
   "timeout": {
     "date": "2026-09-03",
