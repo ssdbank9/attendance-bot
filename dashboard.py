@@ -348,45 +348,58 @@ def _valid_date(value):
         return False
 
 
-def _run_bot_now(mode, wait_seconds=45):
+def _run_bot_now(mode, wait_seconds=90):
     """Run the bot and report what ACTUALLY happened.
 
     Returns (ok, message, died_silently). ok is True/False, or None while it is
     still running. died_silently is True only when the child could not report
     for itself, so the caller must send the push instead of double-notifying.
 
-    Fire-and-forget Popen is what let this page cheerfully answer
-    "running now..." while the child died on import - seven times across
-    2026-08-27/28, with nothing in any log. Waiting for the exit code and then
-    reading the status file back is the only way this page can tell the truth.
+    Launches the bot with Popen and polls for completion. If the bot is still
+    running after wait_seconds, leaves it alive (unlike subprocess.run which
+    kills on TimeoutExpired) and reports "still running".
     """
     label = "Time-In" if mode == "timein" else "Time-Out"
+    today = pk_now().strftime("%Y-%m-%d")
     try:
-        proc = subprocess.run(
+        proc = subprocess.Popen(
             [_system_python(), str(BASE_DIR / "timein_bot.py"), mode, "--now"],
-            capture_output=True, text=True, timeout=wait_seconds,
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
             creationflags=subprocess.CREATE_NO_WINDOW,
         )
-    except subprocess.TimeoutExpired:
-        return None, f"{label} is still running - refresh in a moment", False
     except Exception as exc:
         return False, f"{label} could not start: {type(exc).__name__}", True
 
+    import time as _time
+    deadline = _time.monotonic() + wait_seconds
+    while _time.monotonic() < deadline:
+        rc = proc.poll()
+        if rc is not None:
+            break
+        rec = load_json(STATUS_FILE).get(mode, {})
+        if rec.get("date") == today and rec.get("status") == "success":
+            when = rec.get("action_time") or rec.get("observed_time") or "?"
+            return True, f"{label} marked at {when}", False
+        _time.sleep(3)
+
+    if proc.poll() is None:
+        return None, f"{label} is still running - refresh in a moment", False
+
     if proc.returncode != 0:
-        tail = (proc.stderr or proc.stdout or "").strip().splitlines()
+        out = (proc.stderr.read() if proc.stderr else "") or ""
+        tail = out.strip().splitlines()
         detail = tail[-1][:160] if tail else f"exit code {proc.returncode}"
         return False, f"{label} FAILED to run: {detail}", True
 
-    # Exit code 0 only proves the process ran. The status file says what it did.
-    today = pk_now().strftime("%Y-%m-%d")
     rec = load_json(STATUS_FILE).get(mode, {})
     if rec.get("date") == today and rec.get("status") == "success":
         when = rec.get("action_time") or rec.get("observed_time") or "?"
         return True, f"{label} marked at {when}", False
     if rec.get("date") == today and rec.get("status") in ("failed", "skipped"):
         return False, rec.get("message") or f"{label} did not complete", False
-    out = (proc.stdout or "").strip().splitlines()
-    return False, (out[-1][:160] if out else f"{label} did not complete"), False
+    out = (proc.stdout.read() if proc.stdout else "") or ""
+    tail = out.strip().splitlines()
+    return False, (tail[-1][:160] if tail else f"{label} did not complete"), False
 
 
 def run_manage(script, *args):
