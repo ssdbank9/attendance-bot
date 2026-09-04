@@ -1436,6 +1436,40 @@ def action_sync_portal():
         msg = "Nothing to sync - no failed attempts found today"
     return redirect(url_for("dashboard", msg=msg))
 
+
+@app.route("/action/correct-timeout", methods=["POST"])
+def action_correct_timeout():
+    """Correct a timeout record - insert a new success event with the user-provided time."""
+    date = request.form.get("date", "").strip()
+    time_val = request.form.get("time", "").strip()
+    if not date or not time_val:
+        return redirect(url_for("dashboard", msg="Missing date or time for correction"))
+    import re as _re
+    if not _re.match(r"^\d{4}-\d{2}-\d{2}$", date):
+        return redirect(url_for("dashboard", msg="Invalid date format"))
+    if not _re.match(r"^\d{2}:\d{2}$", time_val):
+        return redirect(url_for("dashboard", msg="Invalid time format"))
+    try:
+        from attendance_db import record_event, export_history_json
+        time_with_sec = time_val + ":00"
+        record_event(
+            date_str=date,
+            mode="timeout",
+            status="success",
+            message=f"Time-Out corrected to {time_val} (manual entry)",
+            action_time=time_with_sec,
+            action_origin="bot",
+        )
+        try:
+            from cloud_sync import sync_status
+            sync_status()
+        except Exception:
+            pass
+        return redirect(url_for("dashboard", msg=f"Time-Out for {date} corrected to {time_val}"))
+    except Exception as exc:
+        return redirect(url_for("dashboard", msg=f"Correction failed: {exc}"))
+
+
 @app.route("/action/update-notifications", methods=["POST"])
 def action_update_notifications():
     notif_prefs = load_notif_prefs()
@@ -1494,6 +1528,8 @@ def compute_hours_worked(ti, to):
     hours = round((to_min - ti_min) / 60, 2)
     if hours <= 0 or hours > 20:
         return None
+    if hours > 12:
+        hours = 12
     return hours
 
 
@@ -1805,6 +1841,7 @@ def dashboard():
             f'<option value="system">Time-In not recorded correctly</option>'
             f'<option value="forgot">Forgot to mark Time-In</option>'
             f'<option value="meeting">Was in a meeting</option>'
+            f'<option value="forgot_to">Forgot to mark Time-Out</option>'
             f'</select></div>'
             f'<button class="btn full outline" onclick="composeEmail()" style="margin-top:.5rem">Compose Correction Email</button>'
             f'</div>'
@@ -1812,6 +1849,17 @@ def dashboard():
             f'<input type="hidden" id="corr-name" value="{admin_first_attr}">'
             f'<input type="hidden" id="corr-date" value="{today}">'
             f'</div>')
+    timeout_corr = (
+        f'<div class="card" id="to-corr-card">'
+        f'<div class="card-title">Correct Time-Out</div>'
+        f'<div class="corr-form">'
+        f'<form action="/action/correct-timeout" method="POST">'
+        f'<div class="corr-row"><label class="corr-label">Date</label>'
+        f'<input type="date" name="date" value="{today}" class="input" style="width:auto;flex:1"></div>'
+        f'<div class="corr-row"><label class="corr-label">Departure Time</label>'
+        f'<input type="time" name="time" value="18:00" class="input" style="width:auto;flex:1"></div>'
+        f'<button type="submit" class="btn full outline" style="margin-top:.5rem">Save Corrected Time-Out</button>'
+        f'</form></div></div>')
     lb = config.get("leave_balance", {})
     leave_balance_html = render_leave_balance(lb)
     is_paused = config.get('paused', False)
@@ -1832,7 +1880,7 @@ def dashboard():
         ti_start=config['timein']['window_start'], ti_end=config['timein']['window_end'],
         to_start=config['timeout']['window_start'], to_end=config['timeout']['window_end'],
         notif_rows=notif_rows, admin_email=html.escape(admin_email, quote=True),
-        email_btn=email_btn, email_action=email_action,
+        email_btn=email_btn, email_action=email_action, timeout_corr=timeout_corr,
         portal_user=html.escape(str(config.get("portal", {}).get("username", "")), quote=True),
         portal_pass="",
         gh_repo=html.escape(str(config.get("cloud_sync", {}).get("github", {}).get("repo", "")), quote=True),
@@ -1964,6 +2012,7 @@ details.collapsible[open] > summary.collapsible-title::after {{transform:rotate(
       </div></div>
     {email_btn}
     {email_action}
+        {timeout_corr}
     <div class="card"><div class="card-title">Tomorrow's Actions</div>
       <div class="quick-actions">
         <a class="btn full" href="#" onclick="return ajaxAction('/action/skip-tomorrow',this)">Skip Tomorrow</a>
@@ -2462,7 +2511,8 @@ details.collapsible[open] > summary.collapsible-title::after {{transform:rotate(
     var reasons={{
       'system':'My Time-In for '+date+' was not recorded correctly by the system. I was present at the office at '+fmtTime+'.',
       'forgot':'I forgot to mark my Time-In for '+date+'. I was present at the office since '+fmtTime+'.',
-      'meeting':'I was in a meeting and could not mark my Time-In for '+date+'. I arrived at the office at '+fmtTime+'.'
+      'meeting':'I was in a meeting and could not mark my Time-In for '+date+'. I arrived at the office at '+fmtTime+'.',
+      'forgot_to':'I forgot to mark my Time-Out for '+date+'. I left the office at '+fmtTime+'. Could you please correct my departure time?'
     }};
     var body='Dear '+name+',%0D%0A%0D%0A'+encodeURIComponent(reasons[reason])+'%0D%0A%0D%0ACould you please update my attendance record?%0D%0A%0D%0AThank you.';
     var subject=encodeURIComponent('Attendance Correction Request - '+date);

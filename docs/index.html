@@ -238,6 +238,19 @@ select.input{appearance:none;background-image:url("data:image/svg+xml,%3Csvg xml
       </div>
       <button class="btn btn-outline" style="border-color:#2196F3;color:#2196F3" onclick="addWfh()">Add WFH</button>
     </div>
+    <div class="card">
+      <div class="card-title">Correct Time-Out</div>
+      <p style="color:var(--text2);font-size:.85rem;margin-bottom:.5rem">Forgot to time out? Enter the actual departure time to fix analytics.</p>
+      <div class="form-group">
+        <label>Date</label>
+        <input class="input" type="date" id="corr-to-date">
+      </div>
+      <div class="form-group">
+        <label>Departure Time</label>
+        <input class="input" type="time" id="corr-to-time" value="18:00">
+      </div>
+      <button class="btn btn-outline" onclick="correctTimeout()">Save Corrected Time-Out</button>
+    </div>
   </div>
 
   <!-- Analytics Tab -->
@@ -768,8 +781,9 @@ function renderStatus() {
   const toIsToday = to.date===today && to.status==='success';
   const tiTime = tiIsToday ? (ti.action_time||ti.observed_time||'--') : '--';
   const tiSub = tiIsToday ? today+(ti.action_origin==='preexisting'?' (pre-existing)':'') : (ti.date===today&&ti.status?ti.status:'--');
-  const toTime = toIsToday ? (to.action_time||to.observed_time||'--') : 'Pending';
-  const toSub = toIsToday ? today+(to.action_origin==='preexisting'?' (pre-existing)':'') : (tiIsToday?'Pending':'');
+  const toCatchup = !toIsToday && to.status==='success' && to.date && to.date<today;
+  const toTime = toIsToday ? (to.action_time||to.observed_time||'--') : (toCatchup ? (to.action_time||to.observed_time||'--') : 'Pending');
+  const toSub = toIsToday ? today+(to.action_origin==='preexisting'?' (pre-existing)':'') : (toCatchup ? to.date+' (catch-up)' : (tiIsToday?'Pending':''));
   el.innerHTML = '<div class="status-item"><div class="status-label">Time-In</div><div class="status-value">'+esc(tiTime)+'</div><div class="status-sub">'+esc(tiSub)+'</div></div>'
     +'<div class="status-item"><div class="status-label">Time-Out</div><div class="status-value">'+esc(toTime)+'</div><div class="status-sub">'+esc(toSub)+'</div></div>';
 
@@ -949,6 +963,7 @@ function computeHoursWorked(ti, to) {
   const toMin = parseInt(op[0])*60+parseInt(op[1]);
   const hours = Math.round(((toMin-tiMin)/60)*100)/100;
   if (hours <= 0 || hours > 20) return null;
+  if (hours > 12) hours = 12;
   return hours;
 }
 
@@ -1580,6 +1595,36 @@ async function saveNotifPrefs() {
   if (!acceptWrite('notifPrefs','notifPrefs',r)) { await recoverWriteFailure([r], 'Notification settings'); return; }
   localStorage.setItem(CACHE_KEY, JSON.stringify(S));
   showToast(r.ok?'Notification settings saved':'Save failed','ok');
+}
+
+async function correctTimeout() {
+  var dateVal = document.getElementById('corr-to-date').value;
+  var timeVal = document.getElementById('corr-to-time').value;
+  if (!dateVal||!timeVal) { showToast('Please fill date and time','error'); return; }
+  var timeWithSec = timeVal+':00';
+  var history = S.history||{};
+  var rec = history[dateVal]||{};
+  rec.timeout = timeWithSec;
+  history[dateVal] = rec;
+  S.history = history;
+  try {
+    var histPath = 'timein_history.json';
+    var r = await fetch('https://api.github.com/repos/'+GH.repo+'/contents/'+histPath, {headers:GH.headers()});
+    var meta = await r.json();
+    var sha = meta.sha;
+    var histData = JSON.parse(atob(meta.content));
+    if (!histData.records) histData.records = {};
+    if (!histData.records[dateVal]) histData.records[dateVal] = {};
+    histData.records[dateVal].timeout = timeWithSec;
+    var encoded = btoa(unescape(encodeURIComponent(JSON.stringify(histData,null,2))));
+    var wr = await fetch('https://api.github.com/repos/'+GH.repo+'/contents/'+histPath, {
+      method:'PUT', headers:GH.headers(),
+      body:JSON.stringify({message:'Correct timeout for '+dateVal+' to '+timeVal, content:encoded, sha:sha})
+    });
+    if (!wr.ok) throw new Error('Write failed: '+wr.status);
+    showToast('Time-Out for '+dateVal+' corrected to '+timeVal,'ok');
+    renderAll();
+  } catch(e) { showToast('Failed: '+e.message,'error'); }
 }
 
 // ===== Auto-refresh =====
