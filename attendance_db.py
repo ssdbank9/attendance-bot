@@ -84,6 +84,29 @@ def record_event(date_str, mode, status, message, action_time=None,
     _export_all()
 
 
+def record_correction_next_day(date_str, time_str, message=""):
+    """Record a timeout correction where the actual timeout happened the
+    following calendar day (e.g. worked past midnight). Sets recorded_at
+    to the next day so export_history_json flags timeout_next_day."""
+    init_db()
+    from datetime import timedelta
+    next_day = (datetime.strptime(date_str, "%Y-%m-%d") + timedelta(days=1)).strftime("%Y-%m-%d")
+    recorded_at = next_day + " " + time_str
+    conn = get_connection()
+    try:
+        conn.execute(
+            "INSERT INTO events (date, mode, status, message, action_time, "
+            "action_origin, observed_time, recorded_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            (date_str, "timeout", "success", message, time_str, "bot",
+             None, recorded_at),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+    _export_all()
+
+
 def get_latest(mode, date_str=None):
     """Latest event for a mode, optionally restricted to a specific date.
     Returns a dict or None."""

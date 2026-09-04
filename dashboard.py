@@ -1466,24 +1466,32 @@ def action_correct_attendance():
     import re as _re
     if not _re.match(r"^\d{4}-\d{2}-\d{2}$", date):
         return redirect(url_for("dashboard", msg="Invalid date format"))
+    timeout_next_day = request.form.get("timeout_next_day") == "on"
     parts = []
     try:
-        from attendance_db import record_event
+        from attendance_db import record_event, record_correction_next_day
         for mode, val, label in [("timein", ti_val, "Time-In"), ("timeout", to_val, "Time-Out")]:
             if not val:
                 continue
             if not _re.match(r"^\d{2}:\d{2}$", val):
                 return redirect(url_for("dashboard", msg=f"Invalid {label} time format"))
             time_with_sec = val + ":00"
-            record_event(
-                date_str=date,
-                mode=mode,
-                status="success",
-                message=f"{label} corrected to {val} (manual entry)",
-                action_time=time_with_sec,
-                action_origin="bot",
-            )
-            parts.append(f"{label}={val}")
+            if mode == "timeout" and timeout_next_day:
+                record_correction_next_day(
+                    date_str=date, time_str=time_with_sec,
+                    message=f"{label} corrected to {val} (next-day manual entry)",
+                )
+                parts.append(f"{label}={val} (next day)")
+            else:
+                record_event(
+                    date_str=date,
+                    mode=mode,
+                    status="success",
+                    message=f"{label} corrected to {val} (manual entry)",
+                    action_time=time_with_sec,
+                    action_origin="bot",
+                )
+                parts.append(f"{label}={val}")
         try:
             from cloud_sync import sync_status, push_all
             sync_status()
@@ -1883,6 +1891,8 @@ def dashboard():
         f'<input type="time" name="timein" class="input" style="width:auto;flex:1"></div>'
         f'<div class="corr-row"><label class="corr-label">Correct Time-Out</label>'
         f'<input type="time" name="timeout" class="input" style="width:auto;flex:1"></div>'
+        f'<div class="corr-row" style="align-items:center"><input type="checkbox" name="timeout_next_day" id="timeout_next_day" style="width:auto;margin-right:.5rem">'
+        f'<label for="timeout_next_day" class="corr-label" style="font-size:.85rem">Time-Out was after midnight (next day)</label></div>'
         f'<button type="submit" class="btn full outline" style="margin-top:.5rem">Save Correction</button>'
         f'</form></div></div>')
     lb = config.get("leave_balance", {})

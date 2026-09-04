@@ -266,6 +266,10 @@ select.input{appearance:none;background-image:url("data:image/svg+xml,%3Csvg xml
         <label>Correct Time-Out</label>
         <input class="input" type="time" id="corr-att-to">
       </div>
+      <div class="form-group" style="display:flex;align-items:center;gap:.5rem">
+        <input type="checkbox" id="corr-att-nextday">
+        <label for="corr-att-nextday" style="margin:0;font-size:.85rem">Time-Out was after midnight (next day)</label>
+      </div>
       <button class="btn btn-outline" onclick="correctAttendance()">Save Correction</button>
     </div>
     <div class="card">
@@ -1744,7 +1748,16 @@ async function correctAttendance() {
     if (!histData.records[dateVal]) histData.records[dateVal] = {};
     var parts = [];
     if (tiVal) { histData.records[dateVal].timein = tiVal+':00'; parts.push('Time-In='+tiVal); }
-    if (toVal) { histData.records[dateVal].timeout = toVal+':00'; parts.push('Time-Out='+toVal); }
+    if (toVal) {
+      histData.records[dateVal].timeout = toVal+':00';
+      parts.push('Time-Out='+toVal);
+      if (document.getElementById('corr-att-nextday').checked) {
+        histData.records[dateVal].timeout_next_day = true;
+        parts.push('(next day)');
+      } else {
+        delete histData.records[dateVal].timeout_next_day;
+      }
+    }
     var encoded = btoa(unescape(encodeURIComponent(JSON.stringify(histData,null,2))));
     var wr = await fetch('https://api.github.com/repos/'+GH.repo+'/contents/'+histPath, {
       method:'PUT', headers:GH.headers(),
