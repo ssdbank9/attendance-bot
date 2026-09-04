@@ -1437,35 +1437,44 @@ def action_sync_portal():
     return redirect(url_for("dashboard", msg=msg))
 
 
-@app.route("/action/correct-timeout", methods=["POST"])
-def action_correct_timeout():
-    """Correct a timeout record - insert a new success event with the user-provided time."""
+@app.route("/action/correct-attendance", methods=["POST"])
+def action_correct_attendance():
+    """Correct time-in and/or time-out for a given date."""
     date = request.form.get("date", "").strip()
-    time_val = request.form.get("time", "").strip()
-    if not date or not time_val:
-        return redirect(url_for("dashboard", msg="Missing date or time for correction"))
+    ti_val = request.form.get("timein", "").strip()
+    to_val = request.form.get("timeout", "").strip()
+    if not date:
+        return redirect(url_for("dashboard", msg="Missing date for correction"))
+    if not ti_val and not to_val:
+        return redirect(url_for("dashboard", msg="Enter at least one time to correct"))
     import re as _re
     if not _re.match(r"^\d{4}-\d{2}-\d{2}$", date):
         return redirect(url_for("dashboard", msg="Invalid date format"))
-    if not _re.match(r"^\d{2}:\d{2}$", time_val):
-        return redirect(url_for("dashboard", msg="Invalid time format"))
+    parts = []
     try:
-        from attendance_db import record_event, export_history_json
-        time_with_sec = time_val + ":00"
-        record_event(
-            date_str=date,
-            mode="timeout",
-            status="success",
-            message=f"Time-Out corrected to {time_val} (manual entry)",
-            action_time=time_with_sec,
-            action_origin="bot",
-        )
+        from attendance_db import record_event
+        for mode, val, label in [("timein", ti_val, "Time-In"), ("timeout", to_val, "Time-Out")]:
+            if not val:
+                continue
+            if not _re.match(r"^\d{2}:\d{2}$", val):
+                return redirect(url_for("dashboard", msg=f"Invalid {label} time format"))
+            time_with_sec = val + ":00"
+            record_event(
+                date_str=date,
+                mode=mode,
+                status="success",
+                message=f"{label} corrected to {val} (manual entry)",
+                action_time=time_with_sec,
+                action_origin="bot",
+            )
+            parts.append(f"{label}={val}")
         try:
-            from cloud_sync import sync_status
+            from cloud_sync import sync_status, push_all
             sync_status()
+            push_all()
         except Exception:
             pass
-        return redirect(url_for("dashboard", msg=f"Time-Out for {date} corrected to {time_val}"))
+        return redirect(url_for("dashboard", msg=f"{date} corrected: {', '.join(parts)}"))
     except Exception as exc:
         return redirect(url_for("dashboard", msg=f"Correction failed: {exc}"))
 
@@ -1528,8 +1537,6 @@ def compute_hours_worked(ti, to):
     hours = round((to_min - ti_min) / 60, 2)
     if hours <= 0 or hours > 20:
         return None
-    if hours > 12:
-        hours = 12
     return hours
 
 
@@ -1851,14 +1858,17 @@ def dashboard():
             f'</div>')
     timeout_corr = (
         f'<div class="card" id="to-corr-card">'
-        f'<div class="card-title">Correct Time-Out</div>'
+        f'<div class="card-title">Correct Attendance</div>'
+        f'<p style="color:var(--text2);font-size:.85rem;margin-bottom:.5rem">Fix time-in or time-out for any date. Leave a field blank to keep existing value.</p>'
         f'<div class="corr-form">'
-        f'<form action="/action/correct-timeout" method="POST">'
+        f'<form action="/action/correct-attendance" method="POST">'
         f'<div class="corr-row"><label class="corr-label">Date</label>'
         f'<input type="date" name="date" value="{today}" class="input" style="width:auto;flex:1"></div>'
-        f'<div class="corr-row"><label class="corr-label">Departure Time</label>'
-        f'<input type="time" name="time" value="18:00" class="input" style="width:auto;flex:1"></div>'
-        f'<button type="submit" class="btn full outline" style="margin-top:.5rem">Save Corrected Time-Out</button>'
+        f'<div class="corr-row"><label class="corr-label">Correct Time-In</label>'
+        f'<input type="time" name="timein" class="input" style="width:auto;flex:1"></div>'
+        f'<div class="corr-row"><label class="corr-label">Correct Time-Out</label>'
+        f'<input type="time" name="timeout" class="input" style="width:auto;flex:1"></div>'
+        f'<button type="submit" class="btn full outline" style="margin-top:.5rem">Save Correction</button>'
         f'</form></div></div>')
     lb = config.get("leave_balance", {})
     leave_balance_html = render_leave_balance(lb)

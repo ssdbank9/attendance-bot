@@ -239,17 +239,21 @@ select.input{appearance:none;background-image:url("data:image/svg+xml,%3Csvg xml
       <button class="btn btn-outline" style="border-color:#2196F3;color:#2196F3" onclick="addWfh()">Add WFH</button>
     </div>
     <div class="card">
-      <div class="card-title">Correct Time-Out</div>
-      <p style="color:var(--text2);font-size:.85rem;margin-bottom:.5rem">Forgot to time out? Enter the actual departure time to fix analytics.</p>
+      <div class="card-title">Correct Attendance</div>
+      <p style="color:var(--text2);font-size:.85rem;margin-bottom:.5rem">Fix time-in or time-out for any date. Leave a field blank to keep the existing value.</p>
       <div class="form-group">
         <label>Date</label>
-        <input class="input" type="date" id="corr-to-date">
+        <input class="input" type="date" id="corr-att-date">
       </div>
       <div class="form-group">
-        <label>Departure Time</label>
-        <input class="input" type="time" id="corr-to-time" value="18:00">
+        <label>Correct Time-In</label>
+        <input class="input" type="time" id="corr-att-ti">
       </div>
-      <button class="btn btn-outline" onclick="correctTimeout()">Save Corrected Time-Out</button>
+      <div class="form-group">
+        <label>Correct Time-Out</label>
+        <input class="input" type="time" id="corr-att-to">
+      </div>
+      <button class="btn btn-outline" onclick="correctAttendance()">Save Correction</button>
     </div>
   </div>
 
@@ -963,7 +967,6 @@ function computeHoursWorked(ti, to) {
   const toMin = parseInt(op[0])*60+parseInt(op[1]);
   const hours = Math.round(((toMin-tiMin)/60)*100)/100;
   if (hours <= 0 || hours > 20) return null;
-  if (hours > 12) hours = 12;
   return hours;
 }
 
@@ -1597,16 +1600,12 @@ async function saveNotifPrefs() {
   showToast(r.ok?'Notification settings saved':'Save failed','ok');
 }
 
-async function correctTimeout() {
-  var dateVal = document.getElementById('corr-to-date').value;
-  var timeVal = document.getElementById('corr-to-time').value;
-  if (!dateVal||!timeVal) { showToast('Please fill date and time','error'); return; }
-  var timeWithSec = timeVal+':00';
-  var history = S.history||{};
-  var rec = history[dateVal]||{};
-  rec.timeout = timeWithSec;
-  history[dateVal] = rec;
-  S.history = history;
+async function correctAttendance() {
+  var dateVal = document.getElementById('corr-att-date').value;
+  var tiVal = document.getElementById('corr-att-ti').value;
+  var toVal = document.getElementById('corr-att-to').value;
+  if (!dateVal) { showToast('Please select a date','error'); return; }
+  if (!tiVal && !toVal) { showToast('Enter at least one time to correct','error'); return; }
   try {
     var histPath = 'timein_history.json';
     var r = await fetch('https://api.github.com/repos/'+GH.repo+'/contents/'+histPath, {headers:GH.headers()});
@@ -1615,14 +1614,17 @@ async function correctTimeout() {
     var histData = JSON.parse(atob(meta.content));
     if (!histData.records) histData.records = {};
     if (!histData.records[dateVal]) histData.records[dateVal] = {};
-    histData.records[dateVal].timeout = timeWithSec;
+    var parts = [];
+    if (tiVal) { histData.records[dateVal].timein = tiVal+':00'; parts.push('Time-In='+tiVal); }
+    if (toVal) { histData.records[dateVal].timeout = toVal+':00'; parts.push('Time-Out='+toVal); }
     var encoded = btoa(unescape(encodeURIComponent(JSON.stringify(histData,null,2))));
     var wr = await fetch('https://api.github.com/repos/'+GH.repo+'/contents/'+histPath, {
       method:'PUT', headers:GH.headers(),
-      body:JSON.stringify({message:'Correct timeout for '+dateVal+' to '+timeVal, content:encoded, sha:sha})
+      body:JSON.stringify({message:'Correct attendance for '+dateVal+': '+parts.join(', '), content:encoded, sha:sha})
     });
     if (!wr.ok) throw new Error('Write failed: '+wr.status);
-    showToast('Time-Out for '+dateVal+' corrected to '+timeVal,'ok');
+    S.history = histData.records;
+    showToast(dateVal+' corrected: '+parts.join(', '),'ok');
     renderAll();
   } catch(e) { showToast('Failed: '+e.message,'error'); }
 }
