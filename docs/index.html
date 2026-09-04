@@ -157,6 +157,14 @@ select.input{appearance:none;background-image:url("data:image/svg+xml,%3Csvg xml
       <button class="btn full" id="pause-btn" onclick="togglePause()">Pause Bot</button>
       <button class="btn btn-outline full" style="margin-top:.5rem;border-color:#e67e22;color:#e67e22" onclick="snoozeTomorrow()">Snooze Tomorrow (2h)</button>
     </div>
+    <div class="card" id="wfh-clock-card" style="display:none">
+      <div class="card-title" style="color:#2196F3">WFH Clock</div>
+      <div style="display:flex;gap:.5rem;margin-bottom:.5rem">
+        <button class="btn btn-primary" style="flex:1;background:#2196F3" id="wfh-in-btn" onclick="wfhClockIn()">Clock In</button>
+        <button class="btn btn-outline" style="flex:1;border-color:#2196F3;color:#2196F3" id="wfh-out-btn" onclick="wfhClockOut()">Clock Out</button>
+      </div>
+      <div id="wfh-clock-status" style="font-size:.8rem;color:var(--text2)"></div>
+    </div>
     <div class="card">
       <div class="card-title">Today's Status</div>
       <div id="status-content" class="status-grid"></div>
@@ -757,7 +765,8 @@ function renderAll() {
   renderHolidays();
   renderWorkingWeekends();
   renderAnalytics();
-  renderSettings();
+  renderSettings();  renderWfhClock();
+
 }
 
 function renderWorkingWeekends() {
@@ -1598,6 +1607,81 @@ async function saveNotifPrefs() {
   if (!acceptWrite('notifPrefs','notifPrefs',r)) { await recoverWriteFailure([r], 'Notification settings'); return; }
   localStorage.setItem(CACHE_KEY, JSON.stringify(S));
   showToast(r.ok?'Notification settings saved':'Save failed','ok');
+}
+
+function isWfhToday() {
+  var today = pkNow().getFullYear()+'-'+String(pkNow().getMonth()+1).padStart(2,'0')+'-'+String(pkNow().getDate()).padStart(2,'0');
+  var bl = S.blackout||{};
+  if ((bl.wfh||[]).find(function(d){return d.date===today})) return true;
+  var ranges = bl.wfh_ranges||[];
+  for (var i=0;i<ranges.length;i++) { if (ranges[i].start<=today && today<=ranges[i].end) return true; }
+  return false;
+}
+
+function renderWfhClock() {
+  var card = document.getElementById('wfh-clock-card');
+  if (!isWfhToday()) { card.style.display='none'; return; }
+  card.style.display='';
+  var today = pkNow().getFullYear()+'-'+String(pkNow().getMonth()+1).padStart(2,'0')+'-'+String(pkNow().getDate()).padStart(2,'0');
+  var rec = (S.history||{})[today]||{};
+  var statusEl = document.getElementById('wfh-clock-status');
+  var inBtn = document.getElementById('wfh-in-btn');
+  var outBtn = document.getElementById('wfh-out-btn');
+  var parts = [];
+  if (rec.timein) { parts.push('In: '+rec.timein.slice(0,5)); inBtn.disabled=true; inBtn.textContent='Clocked In'; }
+  else { inBtn.disabled=false; inBtn.textContent='Clock In'; }
+  if (rec.timeout) { parts.push('Out: '+rec.timeout.slice(0,5)); outBtn.disabled=true; outBtn.textContent='Clocked Out'; }
+  else { outBtn.disabled=false; outBtn.textContent='Clock Out'; }
+  statusEl.textContent = parts.length ? parts.join(' | ') : 'Not clocked in yet';
+}
+
+async function wfhClockIn() {
+  var today = pkNow().getFullYear()+'-'+String(pkNow().getMonth()+1).padStart(2,'0')+'-'+String(pkNow().getDate()).padStart(2,'0');
+  var now = String(pkNow().getHours()).padStart(2,'0')+':'+String(pkNow().getMinutes()).padStart(2,'0')+':'+String(pkNow().getSeconds()).padStart(2,'0');
+  try {
+    var histPath = 'timein_history.json';
+    var r = await fetch('https://api.github.com/repos/'+GH.repo+'/contents/'+histPath, {headers:GH.headers()});
+    var meta = await r.json();
+    var histData = JSON.parse(atob(meta.content));
+    if (!histData.records) histData.records = {};
+    if (!histData.records[today]) histData.records[today] = {};
+    if (histData.records[today].timein) { showToast('Already clocked in at '+histData.records[today].timein.slice(0,5),'error'); return; }
+    histData.records[today].timein = now;
+    var encoded = btoa(unescape(encodeURIComponent(JSON.stringify(histData,null,2))));
+    var wr = await fetch('https://api.github.com/repos/'+GH.repo+'/contents/'+histPath, {
+      method:'PUT', headers:GH.headers(),
+      body:JSON.stringify({message:'WFH clock-in '+today+' at '+now.slice(0,5)+' (mobile)', content:encoded, sha:meta.sha})
+    });
+    if (!wr.ok) throw new Error('Write failed: '+wr.status);
+    S.history = histData.records;
+    showToast('WFH clocked in at '+now.slice(0,5),'ok');
+    renderWfhClock();
+  } catch(e) { showToast('Failed: '+e.message,'error'); }
+}
+
+async function wfhClockOut() {
+  var today = pkNow().getFullYear()+'-'+String(pkNow().getMonth()+1).padStart(2,'0')+'-'+String(pkNow().getDate()).padStart(2,'0');
+  var now = String(pkNow().getHours()).padStart(2,'0')+':'+String(pkNow().getMinutes()).padStart(2,'0')+':'+String(pkNow().getSeconds()).padStart(2,'0');
+  var rec = (S.history||{})[today]||{};
+  if (!rec.timein) { showToast('Clock in first','error'); return; }
+  try {
+    var histPath = 'timein_history.json';
+    var r = await fetch('https://api.github.com/repos/'+GH.repo+'/contents/'+histPath, {headers:GH.headers()});
+    var meta = await r.json();
+    var histData = JSON.parse(atob(meta.content));
+    if (!histData.records) histData.records = {};
+    if (!histData.records[today]) histData.records[today] = {};
+    histData.records[today].timeout = now;
+    var encoded = btoa(unescape(encodeURIComponent(JSON.stringify(histData,null,2))));
+    var wr = await fetch('https://api.github.com/repos/'+GH.repo+'/contents/'+histPath, {
+      method:'PUT', headers:GH.headers(),
+      body:JSON.stringify({message:'WFH clock-out '+today+' at '+now.slice(0,5)+' (mobile)', content:encoded, sha:meta.sha})
+    });
+    if (!wr.ok) throw new Error('Write failed: '+wr.status);
+    S.history = histData.records;
+    showToast('WFH clocked out at '+now.slice(0,5),'ok');
+    renderWfhClock();
+  } catch(e) { showToast('Failed: '+e.message,'error'); }
 }
 
 async function correctAttendance() {
