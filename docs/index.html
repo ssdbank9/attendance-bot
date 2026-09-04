@@ -159,11 +159,15 @@ select.input{appearance:none;background-image:url("data:image/svg+xml,%3Csvg xml
     </div>
     <div class="card" id="wfh-clock-card" style="display:none">
       <div class="card-title" style="color:#2196F3">WFH Hours <span style="font-size:.7rem;font-weight:400;color:var(--text2)">(analytics only)</span></div>
+      <div style="display:flex;gap:.5rem;margin-bottom:.5rem">
+        <button class="btn" style="flex:1;background:#2196F3;color:#fff" onclick="wfhRecordNow('timein')">Record Time In Now</button>
+        <button class="btn btn-outline" style="flex:1;border-color:#2196F3;color:#2196F3" onclick="wfhRecordNow('timeout')">Record Time Out Now</button>
+      </div>
       <div style="display:flex;gap:.5rem;align-items:flex-end;margin-bottom:.5rem">
-        <div style="flex:1"><label style="font-size:.75rem;color:var(--text2)">Time In</label><input class="input" type="time" id="wfh-ti-time" value="09:00"></div>
+        <div style="flex:1"><label style="font-size:.75rem;color:var(--text2)">Or pick Time In</label><input class="input" type="time" id="wfh-ti-time" value="09:00"></div>
         <div style="flex:1"><label style="font-size:.75rem;color:var(--text2)">Time Out</label><input class="input" type="time" id="wfh-to-time" value="18:00"></div>
       </div>
-      <button class="btn full" style="background:#2196F3;color:#fff" id="wfh-save-btn" onclick="saveWfhHours()">Save WFH Hours</button>
+      <button class="btn full btn-outline" style="border-color:#2196F3;color:#2196F3" id="wfh-save-btn" onclick="saveWfhHours()">Save Custom Hours</button>
       <div id="wfh-clock-status" style="font-size:.8rem;color:var(--text2);margin-top:.4rem"></div>
     </div>
     <div class="card">
@@ -1640,6 +1644,31 @@ function renderWfhClock() {
     saveBtn.textContent = 'Save WFH Hours';
     statusEl.textContent = '';
   }
+}
+
+async function wfhRecordNow(mode) {
+  var today = pkNow().getFullYear()+'-'+String(pkNow().getMonth()+1).padStart(2,'0')+'-'+String(pkNow().getDate()).padStart(2,'0');
+  var now = String(pkNow().getHours()).padStart(2,'0')+':'+String(pkNow().getMinutes()).padStart(2,'0')+':'+String(pkNow().getSeconds()).padStart(2,'0');
+  var label = mode==='timein'?'Time-In':'Time-Out';
+  try {
+    var histPath = 'timein_history.json';
+    var r = await fetch('https://api.github.com/repos/'+GH.repo+'/contents/'+histPath, {headers:GH.headers()});
+    var meta = await r.json();
+    var histData = JSON.parse(atob(meta.content));
+    if (!histData.records) histData.records = {};
+    if (!histData.records[today]) histData.records[today] = {};
+    var key = mode==='timein'?'timein':'timeout';
+    histData.records[today][key] = now;
+    var encoded = btoa(unescape(encodeURIComponent(JSON.stringify(histData,null,2))));
+    var wr = await fetch('https://api.github.com/repos/'+GH.repo+'/contents/'+histPath, {
+      method:'PUT', headers:GH.headers(),
+      body:JSON.stringify({message:'WFH '+label+' '+today+' at '+now.slice(0,5)+' (mobile)', content:encoded, sha:meta.sha})
+    });
+    if (!wr.ok) throw new Error('Write failed: '+wr.status);
+    S.history = histData.records;
+    showToast('WFH '+label+' recorded at '+now.slice(0,5),'ok');
+    renderWfhClock();
+  } catch(e) { showToast('Failed: '+e.message,'error'); }
 }
 
 async function saveWfhHours() {

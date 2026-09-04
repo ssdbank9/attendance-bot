@@ -1161,6 +1161,27 @@ def action_wfh_hours():
     return redirect(url_for("dashboard", msg=f"WFH hours saved: {', '.join(parts)}"))
 
 
+@app.route("/action/wfh-record-now", methods=["POST"])
+def action_wfh_record_now():
+    """Record current time as WFH time-in or time-out."""
+    today_str = pk_now().strftime("%Y-%m-%d")
+    now_time = pk_now().strftime("%H:%M:%S")
+    mode = request.form.get("mode", "timein")
+    if mode not in ("timein", "timeout"):
+        return redirect(url_for("dashboard", msg="Invalid mode"))
+    label = "Time-In" if mode == "timein" else "Time-Out"
+    from attendance_db import record_event
+    record_event(today_str, mode, "success", f"WFH {label} (record now)",
+                 action_time=now_time, action_origin="wfh")
+    try:
+        from cloud_sync import sync_status, push_all
+        sync_status()
+        push_all()
+    except Exception:
+        pass
+    return redirect(url_for("dashboard", msg=f"WFH {label} recorded at {now_time[:5]}"))
+
+
 @app.route("/api/wfh-clock-status")
 def api_wfh_clock_status():
     today_str = pk_now().strftime("%Y-%m-%d")
@@ -2044,12 +2065,16 @@ details.collapsible[open] > summary.collapsible-title::after {{transform:rotate(
     <div class="card" id="wfh-clock-card" style="display:none">
       <div class="card-title" style="color:var(--wfh-color,#2196F3)">WFH Hours <span style="font-size:.7rem;font-weight:400;color:var(--text2)">(analytics only)</span></div>
       <div id="wfh-clock-body">
+        <div style="display:flex;gap:.5rem;margin-bottom:.5rem">
+          <form action="/action/wfh-record-now" method="POST" style="flex:1"><input type="hidden" name="mode" value="timein"><button type="submit" class="btn full" style="background:var(--wfh-color,#2196F3);color:#fff">Record Time In Now</button></form>
+          <form action="/action/wfh-record-now" method="POST" style="flex:1"><input type="hidden" name="mode" value="timeout"><button type="submit" class="btn full outline">Record Time Out Now</button></form>
+        </div>
         <form action="/action/wfh-hours" method="POST">
           <div style="display:flex;gap:.5rem;align-items:flex-end;margin-bottom:.5rem">
-            <div style="flex:1"><label style="font-size:.75rem;color:var(--text2)">Time In</label><input type="time" name="wfh_ti" id="wfh-ti-time" value="09:00" class="input"></div>
+            <div style="flex:1"><label style="font-size:.75rem;color:var(--text2)">Or pick Time In</label><input type="time" name="wfh_ti" id="wfh-ti-time" value="09:00" class="input"></div>
             <div style="flex:1"><label style="font-size:.75rem;color:var(--text2)">Time Out</label><input type="time" name="wfh_to" id="wfh-to-time" value="18:00" class="input"></div>
           </div>
-          <button type="submit" class="btn full" id="wfh-save-btn" style="background:var(--wfh-color,#2196F3);color:#fff">Save WFH Hours</button>
+          <button type="submit" class="btn full outline" id="wfh-save-btn">Save Custom Hours</button>
         </form>
         <div class="wfh-clock-status" id="wfh-clock-status-text"></div>
       </div>
