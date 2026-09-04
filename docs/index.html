@@ -268,6 +268,32 @@ select.input{appearance:none;background-image:url("data:image/svg+xml,%3Csvg xml
       </div>
       <button class="btn btn-outline" onclick="correctAttendance()">Save Correction</button>
     </div>
+    <div class="card">
+      <div class="card-title">Request Correction Email</div>
+      <p style="color:var(--text2);font-size:.85rem;margin-bottom:.5rem">Compose a correction email to your administrator.</p>
+      <div class="form-group">
+        <label>Date</label>
+        <input class="input" type="date" id="corr-email-date">
+      </div>
+      <div class="form-group">
+        <label>Time (arrival or departure)</label>
+        <input class="input" type="time" id="corr-email-time">
+      </div>
+      <div class="form-group">
+        <label>Reason</label>
+        <select class="input" id="corr-email-reason">
+          <option value="system">Time-In not recorded correctly</option>
+          <option value="forgot">Forgot to mark Time-In</option>
+          <option value="meeting">Was in a meeting</option>
+          <option value="forgot_to">Forgot to mark Time-Out</option>
+        </select>
+      </div>
+      <div class="form-group">
+        <label>Admin Name <span style="color:var(--text2);font-weight:400">(first name)</span></label>
+        <input class="input" type="text" id="corr-email-name" placeholder="e.g. Ahmed">
+      </div>
+      <button class="btn btn-outline" style="border-color:var(--primary);color:var(--primary)" onclick="composeEmail()">Compose Correction Email</button>
+    </div>
   </div>
 
   <!-- Analytics Tab -->
@@ -771,7 +797,9 @@ function renderAll() {
   renderWorkingWeekends();
   renderAnalytics();
   renderSettings();  renderWfhClock();
-
+  // Default correction email date to today
+  var ced = document.getElementById('corr-email-date');
+  if (ced && !ced.value) ced.value = today();
 }
 
 function renderWorkingWeekends() {
@@ -1726,6 +1754,30 @@ async function correctAttendance() {
     showToast(dateVal+' corrected: '+parts.join(', '),'ok');
     renderAll();
   } catch(e) { showToast('Failed: '+e.message,'error'); }
+}
+
+// ===== Correction Email =====
+function composeEmail() {
+  var time = document.getElementById('corr-email-time').value;
+  var reason = document.getElementById('corr-email-reason').value;
+  var email = (S.notifPrefs||{}).admin_email||'';
+  var name = document.getElementById('corr-email-name').value || 'Sir/Madam';
+  var dateVal = document.getElementById('corr-email-date').value;
+  if (!email) { showToast('Set Admin Email in Settings first','error'); return; }
+  if (!dateVal) { showToast('Please select a date','error'); return; }
+  if (!time) { var m = 35 + Math.floor(Math.random()*25); time = '08:' + String(m).padStart(2,'0'); }
+  var h = parseInt(time.split(':')[0]); var mn = time.split(':')[1];
+  var ampm = h >= 12 ? 'PM' : 'AM'; var h12 = h > 12 ? h-12 : (h===0 ? 12 : h);
+  var fmtTime = String(h12).padStart(2,'0') + ':' + mn + ' ' + ampm;
+  var reasons = {
+    'system': 'My Time-In for ' + dateVal + ' was not recorded correctly by the system. I was present at the office at ' + fmtTime + '.',
+    'forgot': 'I forgot to mark my Time-In for ' + dateVal + '. I was present at the office since ' + fmtTime + '.',
+    'meeting': 'I was in a meeting and could not mark my Time-In for ' + dateVal + '. I arrived at the office at ' + fmtTime + '.',
+    'forgot_to': 'I forgot to mark my Time-Out for ' + dateVal + '. I left the office at ' + fmtTime + '. Could you please correct my departure time?'
+  };
+  var body = 'Dear ' + name + ',%0D%0A%0D%0A' + encodeURIComponent(reasons[reason]) + '%0D%0A%0D%0ACould you please update my attendance record?%0D%0A%0D%0AThank you.';
+  var subject = encodeURIComponent('Attendance Correction Request - ' + dateVal);
+  window.open('mailto:' + email + '?subject=' + subject + '&body=' + body, '_blank');
 }
 
 // ===== Auto-refresh =====
