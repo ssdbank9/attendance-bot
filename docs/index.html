@@ -625,7 +625,19 @@ async function triggerAction(mode) {
   try {
     const result = await dispatchWorkflowAction(mode);
     if (result.ok) {
-      showToast(label+' triggered - running on your desktop now (takes ~10-30s)', 'ok');
+      showToast(label+' triggered - waiting for result...', 'ok');
+      var oldDate = ((S.status||{})[mode==='timein'?'timein':'timeout']||{}).timestamp||'';
+      for (var attempt=0; attempt<3; attempt++) {
+        await new Promise(function(r){setTimeout(r, 12000)});
+        await syncData();
+        var newDate = ((S.status||{})[mode==='timein'?'timein':'timeout']||{}).timestamp||'';
+        if (newDate !== oldDate) {
+          showToast(label+' confirmed!', 'ok');
+          return;
+        }
+        showToast('Still waiting... (attempt '+(attempt+2)+'/4)', 'ok');
+      }
+      showToast(label+' dispatched but status not yet synced - tap Sync later', 'ok');
     } else {
       showToast('Trigger failed: '+result.message, 'error');
     }
