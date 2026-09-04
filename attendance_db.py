@@ -97,7 +97,7 @@ def get_latest(mode, date_str=None):
             ).fetchone()
         else:
             row = conn.execute(
-                "SELECT * FROM events WHERE mode=? ORDER BY id DESC LIMIT 1",
+                "SELECT * FROM events WHERE mode=? ORDER BY date DESC, id DESC LIMIT 1",
                 (mode,),
             ).fetchone()
         return dict(row) if row else None
