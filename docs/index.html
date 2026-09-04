@@ -1579,6 +1579,12 @@ async function saveNotifPrefs() {
   showToast(r.ok?'Notification settings saved':'Save failed','ok');
 }
 
+// ===== Auto-refresh =====
+setInterval(function(){ if(GH.token && !document.hidden) syncData(); }, 60000);
+document.addEventListener('visibilitychange', function(){
+  if(!document.hidden && GH.token) syncData();
+});
+
 // ===== Start =====
 init();
 </script>
