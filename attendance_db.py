@@ -31,7 +31,8 @@ CREATE TABLE IF NOT EXISTS events (
     action_origin TEXT NOT NULL DEFAULT 'bot'
         CHECK(action_origin IN ('bot', 'preexisting', 'unknown', 'wfh')),
     observed_time TEXT,
-    recorded_at TEXT NOT NULL
+    recorded_at TEXT NOT NULL,
+    next_day INTEGER NOT NULL DEFAULT 0
 );
 CREATE INDEX IF NOT EXISTS idx_events_date_mode ON events(date, mode);
 CREATE INDEX IF NOT EXISTS idx_events_id ON events(id);
@@ -96,8 +97,8 @@ def record_correction_next_day(date_str, time_str, message=""):
     try:
         conn.execute(
             "INSERT INTO events (date, mode, status, message, action_time, "
-            "action_origin, observed_time, recorded_at) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            "action_origin, observed_time, recorded_at, next_day) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1)",
             (date_str, "timeout", "success", message, time_str, "bot",
              None, recorded_at),
         )
@@ -251,7 +252,8 @@ def export_history_json():
     conn = get_connection()
     try:
         rows = conn.execute(
-            "SELECT date, mode, action_time, observed_time, action_origin, recorded_at "
+            "SELECT date, mode, action_time, observed_time, action_origin, recorded_at, "
+            "COALESCE(next_day, 0) as next_day "
             "FROM events WHERE status='success' ORDER BY id ASC"
         ).fetchall()
     finally:
@@ -262,10 +264,8 @@ def export_history_json():
         time_val = r["action_time"] or r["observed_time"]
         if time_val:
             records.setdefault(r["date"], {})[r["mode"]] = time_val
-            if r["mode"] == "timeout" and r["recorded_at"]:
-                rec_date = r["recorded_at"][:10]
-                if rec_date > r["date"]:
-                    records[r["date"]]["timeout_next_day"] = True
+            if r["mode"] == "timeout" and r["next_day"]:
+                records[r["date"]]["timeout_next_day"] = True
     _atomic_write_json(HISTORY_FILE, {"records": records})
 
 
