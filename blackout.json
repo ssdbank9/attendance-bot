@@ -1,9 +1,7 @@
 {
   "dates": [],
   "ranges": [],
-  "working_weekends": [
-    "2026-09-05"
-  ],
+  "working_weekends": [],
   "wfh": [
     {
       "date": "2026-09-07",
