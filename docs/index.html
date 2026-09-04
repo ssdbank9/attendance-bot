@@ -869,13 +869,18 @@ function renderStatus() {
   const ti = st.timein||{};
   const to = st.timeout||{};
   const today = pkNow().getFullYear()+'-'+String(pkNow().getMonth()+1).padStart(2,'0')+'-'+String(pkNow().getDate()).padStart(2,'0');
-  const tiIsToday = ti.date===today && ti.status==='success';
-  const toIsToday = to.date===today && to.status==='success';
-  const tiTime = tiIsToday ? (ti.action_time||ti.observed_time||'--') : '--';
-  const tiSub = tiIsToday ? today+(ti.action_origin==='preexisting'?' (pre-existing)':'') : (ti.date===today&&ti.status?ti.status:'--');
+  const hist = ((S.history||{}).records||{})[today]||{};
+  var tiIsToday = ti.date===today && ti.status==='success';
+  var toIsToday = to.date===today && to.status==='success';
+  var tiFromHist = !tiIsToday && !!hist.timein;
+  var toFromHist = !toIsToday && !!hist.timeout;
+  if (tiFromHist) tiIsToday = true;
+  if (toFromHist) toIsToday = true;
+  const tiTime = tiFromHist ? hist.timein.substring(0,5) : (tiIsToday ? (ti.action_time||ti.observed_time||'--') : '--');
+  const tiSub = tiFromHist ? today+' (history)' : (tiIsToday ? today+(ti.action_origin==='preexisting'?' (pre-existing)':'') : (ti.date===today&&ti.status?ti.status:'--'));
   const toCatchup = !toIsToday && to.status==='success' && to.date && to.date<today;
-  const toTime = toIsToday ? (to.action_time||to.observed_time||'--') : (toCatchup ? (to.action_time||to.observed_time||'--') : 'Pending');
-  const toSub = toIsToday ? today+(to.action_origin==='preexisting'?' (pre-existing)':'') : (toCatchup ? to.date+' (catch-up)' : (tiIsToday?'Pending':''));
+  const toTime = toFromHist ? hist.timeout.substring(0,5) : (toIsToday ? (to.action_time||to.observed_time||'--') : (toCatchup ? (to.action_time||to.observed_time||'--') : 'Pending'));
+  const toSub = toFromHist ? today+' (history)' : (toIsToday ? today+(to.action_origin==='preexisting'?' (pre-existing)':'') : (toCatchup ? to.date+' (catch-up)' : (tiIsToday?'Pending':'')));
   el.innerHTML = '<div class="status-item"><div class="status-label">Time-In</div><div class="status-value">'+esc(tiTime)+'</div><div class="status-sub">'+esc(tiSub)+'</div></div>'
     +'<div class="status-item"><div class="status-label">Time-Out</div><div class="status-value">'+esc(toTime)+'</div><div class="status-sub">'+esc(toSub)+'</div></div>';
 

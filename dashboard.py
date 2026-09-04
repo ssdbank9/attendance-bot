@@ -1906,8 +1906,15 @@ def dashboard():
     ti = status.get("timein", {})
     to = status.get("timeout", {})
     due_date, due_short = next_due_date()
+    history_rec = load_json(HISTORY_FILE).get("records", {}).get(today, {})
     ti_done = ti.get("date") == today and ti.get("status") == "success"
     to_done = to.get("date") == today and to.get("status") == "success"
+    ti_from_history = not ti_done and bool(history_rec.get("timein"))
+    to_from_history = not to_done and bool(history_rec.get("timeout"))
+    if ti_from_history:
+        ti_done = True
+    if to_from_history:
+        to_done = True
     notif_rows, admin_email = render_notif_prefs()
     ti_failed = ti.get("date") == today and ti.get("status") == "failed"
     to_failed = to.get("date") == today and to.get("status") == "failed"
@@ -1963,11 +1970,11 @@ def dashboard():
     return DASHBOARD_HTML.format(
         toast_html=toast_html, today=today, now=now,
         ti_class="done" if ti_done else "none",
-        ti_time=(ti.get("action_time") or ti.get("observed_time") or "-") if ti_done else "-",
-        ti_meta=(today + (" (pre-existing)" if ti.get("action_origin") == "preexisting" else "")) if ti_done else "",
+        ti_time=history_rec["timein"][:5] if ti_from_history else ((ti.get("action_time") or ti.get("observed_time") or "-") if ti_done else "-"),
+        ti_meta=(today + " (history)") if ti_from_history else ((today + (" (pre-existing)" if ti.get("action_origin") == "preexisting" else "")) if ti_done else ""),
         to_class="done" if to_done else "none",
-        to_time=(to.get("action_time") or to.get("observed_time") or "-") if to_done else "-",
-        to_meta=(today + (" (pre-existing)" if to.get("action_origin") == "preexisting" else "")) if to_done else ("Pending" if ti_done else ""),
+        to_time=history_rec["timeout"][:5] if to_from_history else ((to.get("action_time") or to.get("observed_time") or "-") if to_done else "-"),
+        to_meta=(today + " (history)") if to_from_history else ((today + (" (pre-existing)" if to.get("action_origin") == "preexisting" else "")) if to_done else ("Pending" if ti_done else "")),
         due_short=due_short, due_date=due_date,
         workdays_html=render_workdays(workdays), holidays_html=render_holidays(upcoming),
         blackout_html=render_blackouts(bl_dates, bl_ranges, wfh_dates, wfh_ranges),
