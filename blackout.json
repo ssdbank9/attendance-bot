@@ -2,12 +2,6 @@
   "dates": [],
   "ranges": [],
   "working_weekends": [],
-  "wfh": [
-    {
-      "date": "2026-09-07",
-      "reason": "Work from home",
-      "added": "2026-09-04 14:37"
-    }
-  ],
+  "wfh": [],
   "wfh_ranges": []
 }
