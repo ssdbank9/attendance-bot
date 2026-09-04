@@ -1537,21 +1537,20 @@ def action_test_cloud_sync():
     status = "OK" if ok else "FAIL"
     return redirect(url_for("dashboard", msg=f"Sync test: {status} ({message})"))
 
-def compute_hours_worked(ti, to):
-    """Hours between a Time-In and Time-Out clock-time on the same nominal
-    day. Returns None (unknown/not displayable) rather than a bogus negative
-    or huge value - this happens for auto-completed catch-up Time-Outs,
-    where the recorded clock-time can be earlier than the Time-In's because
-    the catch-up actually ran on a later real day but is stamped against the
-    pending day it closes out."""
+def compute_hours_worked(ti, to, timeout_next_day=False):
+    """Hours between a Time-In and Time-Out clock-time. When timeout_next_day
+    is True, the Time-Out was recorded the following calendar day (e.g. a
+    catch-up), so 24h is added to the calculation."""
     if not ti or not to:
         return None
     ti_parts = ti.split(":")
     to_parts = to.split(":")
     ti_min = int(ti_parts[0]) * 60 + int(ti_parts[1])
     to_min = int(to_parts[0]) * 60 + int(to_parts[1])
+    if timeout_next_day:
+        to_min += 24 * 60
     hours = round((to_min - ti_min) / 60, 2)
-    if hours <= 0 or hours > 20:
+    if hours <= 0 or hours > 24.5:
         return None
     return hours
 
@@ -1584,7 +1583,7 @@ def api_analytics():
         rec = records.get(ds, {})
         ti = rec.get("timein")
         to = rec.get("timeout")
-        hours = compute_hours_worked(ti, to) or 0
+        hours = compute_hours_worked(ti, to, rec.get("timeout_next_day", False)) or 0
         is_weekend = d.weekday() >= 5
         is_working_wknd = ds in working_weekends
         hol_name = hol_map.get(ds)
@@ -1649,7 +1648,7 @@ def download_report():
         rec = records.get(ds, {})
         ti = rec.get("timein", "")
         to = rec.get("timeout", "")
-        hours = compute_hours_worked(ti, to)
+        hours = compute_hours_worked(ti, to, rec.get("timeout_next_day", False))
         diff_str = ""
         hours_str = f"{hours:.2f}" if hours is not None else ("N/A" if (ti and to) else "")
         if hours is not None:

@@ -426,6 +426,11 @@ def classify_aku_message(message):
     )
     if any(re.match(pattern, message, re.IGNORECASE) for pattern in known_good):
         return True, message
+    known_error = (
+        r"No\s+Time\s+In\s+information\s+exist",
+    )
+    if any(re.search(p, message, re.IGNORECASE) for p in known_error):
+        return False, message
     return False, "Unrecognized API response: " + message[:200]
 
 
@@ -449,6 +454,21 @@ def call_aku_api(mode, user_id, password):
     return classify_aku_message(message)
 
 
+
+def _portal_date_if_different(message, label):
+    """If the portal response date differs from today, return it as YYYY-MM-DD."""
+    portal_dt = parse_aku_datetime(message, label)
+    if not portal_dt:
+        return None
+    portal_date_str = portal_dt.strftime("%Y-%m-%d")
+    today_str = pk_now().strftime("%Y-%m-%d")
+    if portal_date_str != today_str:
+        log.info("Portal date %s differs from today %s for %s",
+                 portal_date_str, today_str, label)
+        return portal_date_str
+    return None
+
+
 def run_action(mode):
     config = load_config()
     creds = config["credentials"]
@@ -467,14 +487,14 @@ def run_action(mode):
                     "it as pre-existing",
                     label, portal_time,
                 )
-                return True, portal_time, "preexisting"
+                return True, portal_time, "preexisting", _portal_date_if_different(message, field)
             now = pk_now().strftime("%H:%M:%S")
             log.info("%s complete at %s (API: %s)", label, now, message)
-            return True, now, "bot"
-        return False, message, "unknown"
+            return True, now, "bot", None
+        return False, message, "unknown", None
     except Exception as e:
         log.exception("%s API call failed", label)
-        return False, str(e), "unknown"
+        return False, str(e), "unknown", None
 
 
 def run_action_selenium(mode):
@@ -524,7 +544,7 @@ def run_action_selenium(mode):
         time.sleep(3)
     except Exception as e:
         log.exception("%s Selenium click failed", label)
-        return False, str(e), "unknown"
+        return False, str(e), "unknown", None
     finally:
         if driver:
             driver.quit()
@@ -556,14 +576,14 @@ def run_action_selenium(mode):
                 if real_time:
                     if portal_entry_predates_attempt(other_message, "Out", attempted_at):
                         log.info("%s already completed by another actor - confirmed via reconciliation: %s", label, other_message)
-                        return True, real_time, "preexisting"
+                        return True, real_time, "preexisting", _portal_date_if_different(other_message, "Out")
                     now = pk_now().strftime("%H:%M:%S")
                     log.info("%s completed by this Selenium attempt - confirmed via reconciliation: %s", label, other_message)
-                    return True, now, "bot"
+                    return True, now, "bot", None
             except Exception:
                 pass
         log.warning("%s clicked but API verification says: %s", label, message)
-        return False, f"Clicked but not confirmed ({message})", "unknown"
+        return False, f"Clicked but not confirmed ({message})", "unknown", None
 
     field = "In" if mode == "timein" else "Out"
     portal_time = parse_aku_time(message, field)
@@ -573,24 +593,23 @@ def run_action_selenium(mode):
             "as pre-existing",
             label, portal_time,
         )
-        return True, portal_time, "preexisting"
+        return True, portal_time, "preexisting", _portal_date_if_different(message, field)
     now = pk_now().strftime("%H:%M:%S")
     log.info("%s complete at %s (Selenium, verified: %s)", label, now, message)
-    return True, now, "bot"
+    return True, now, "bot", None
 
 
 def attempt_action(mode, retry_cfg):
-    """Run the retry loop for a mode (Selenium primary, optional direct API
-    first). Returns (success, detail, action_origin)."""
+    """Run the retry loop for a mode. Returns (success, detail, action_origin, portal_date_str)."""
     max_attempts = retry_cfg["max_attempts"]
     retry_delay = retry_cfg["delay_seconds"]
 
     if USE_DIRECT_API:
         for attempt in range(1, max_attempts + 1):
             log.info("Attempt %d/%d (API)", attempt, max_attempts)
-            success, detail, action_origin = run_action(mode)
+            success, detail, action_origin, portal_date_str = run_action(mode)
             if success:
-                return True, detail, action_origin
+                return True, detail, action_origin, portal_date_str
             log.warning("Attempt %d failed: %s", attempt, detail)
             if attempt < max_attempts:
                 log.info("Retrying in %d seconds...", retry_delay)
@@ -599,42 +618,58 @@ def attempt_action(mode, retry_cfg):
 
     for attempt in range(1, max_attempts + 1):
         log.info("Attempt %d/%d (Selenium)", attempt, max_attempts)
-        success, detail, action_origin = run_action_selenium(mode)
+        success, detail, action_origin, portal_date_str = run_action_selenium(mode)
         if success:
-            return True, detail, action_origin
+            return True, detail, action_origin, portal_date_str
         log.warning("Attempt %d failed: %s", attempt, detail)
         if attempt < max_attempts:
             log.info("Retrying in %d seconds...", retry_delay)
             time.sleep(retry_delay)
 
-    return False, f"FAILED after {max_attempts} attempts", "unknown"
+    return False, f"FAILED after {max_attempts} attempts", "unknown", None
 
 
-def run_and_record(mode, retry_cfg, catchup_date=None):
-    """Run attempt_action for mode, write status, notify. Returns success."""
+def run_and_record(mode, retry_cfg, catchup_date=None, _recursed=False):
+    """Run attempt_action for mode, write status, notify. Returns success.
+    When the portal date differs from the intended date, files against the
+    portal date and retries once for today."""
     label = LABELS[mode]
-    success, detail, action_origin = attempt_action(mode, retry_cfg)
+    success, detail, action_origin, portal_date_str = attempt_action(mode, retry_cfg)
 
     if success:
+        effective_date = catchup_date
+        if action_origin == "preexisting" and portal_date_str:
+            effective_date = portal_date_str
+
         if action_origin == "preexisting":
             msg = f"{label} was already present before this bot acted (portal reported {detail})"
-        elif catchup_date:
-            missed_fmt = datetime.strptime(catchup_date, "%Y-%m-%d").strftime("%d-%b-%Y")
+            if portal_date_str:
+                msg += f" [portal date: {portal_date_str}]"
+        elif effective_date:
+            missed_fmt = datetime.strptime(effective_date, "%Y-%m-%d").strftime("%d-%b-%Y")
             msg = f"{label} marked at {detail} (completed pending {missed_fmt})"
         else:
             msg = f"{label} marked at {detail}"
         log.info(msg)
         if action_origin == "preexisting":
             write_status(
-                mode, "success", msg, action_time=None, date_str=catchup_date,
+                mode, "success", msg, action_time=None, date_str=effective_date,
                 action_origin="preexisting", observed_time=detail,
             )
         else:
             write_status(
-                mode, "success", msg, action_time=detail, date_str=catchup_date,
+                mode, "success", msg, action_time=detail, date_str=effective_date,
                 action_origin="bot",
             )
             notify_status(mode, detail)
+
+        today_str = pk_now().strftime("%Y-%m-%d")
+        intended_date = catchup_date or today_str
+        if effective_date and effective_date != intended_date and not _recursed:
+            log.info("Portal responded with %s instead of intended %s - "
+                     "retrying for today (%s)", effective_date, intended_date, today_str)
+            return run_and_record(mode, retry_cfg, catchup_date=None, _recursed=True)
+
         log.info("=== Done ===")
         return True
 
@@ -718,9 +753,12 @@ def recheck_portal(mode):
     if portal_time:
         if portal_entry_predates_attempt(message, field, attempted_at):
             origin = "preexisting"
+            portal_date = _portal_date_if_different(message, field)
             msg = f"{label} found on portal at {portal_time} (manual entry detected by recheck)"
+            if portal_date:
+                msg += f" [portal date: {portal_date}]"
             write_status(mode, "success", msg, action_time=None,
-                         date_str=None, action_origin="preexisting",
+                         date_str=portal_date, action_origin="preexisting",
                          observed_time=portal_time)
         else:
             origin = "bot"

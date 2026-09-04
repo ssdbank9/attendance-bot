@@ -999,16 +999,17 @@ function renderAnalytics() {
 
 const TARGET_HOURS = 550/60; // 9h 10m, matches the local dashboard's target
 
-function computeHoursWorked(ti, to) {
-  // Mirrors dashboard.py's compute_hours_worked(): returns null instead of
-  // a bogus negative/huge value for auto-completed catch-up Time-Outs,
-  // where the recorded clock-time can be earlier than the Time-In's.
+function computeHoursWorked(ti, to, timeoutNextDay) {
+  // Mirrors dashboard.py's compute_hours_worked(). When timeoutNextDay is
+  // true, the timeout was recorded the following calendar day (catch-up),
+  // so 24h is added.
   if (!ti || !to) return null;
   const tp = ti.split(':'), op = to.split(':');
   const tiMin = parseInt(tp[0])*60+parseInt(tp[1]);
-  const toMin = parseInt(op[0])*60+parseInt(op[1]);
+  var toMin = parseInt(op[0])*60+parseInt(op[1]);
+  if (timeoutNextDay) toMin += 24*60;
   const hours = Math.round(((toMin-tiMin)/60)*100)/100;
-  if (hours <= 0 || hours > 20) return null;
+  if (hours <= 0 || hours > 24.5) return null;
   return hours;
 }
 
@@ -1037,7 +1038,7 @@ function buildReportRows() {
     const ds = d.toISOString().slice(0,10);
     const rec = records[ds] || {};
     if (rec.timein || rec.timeout) {
-      const hours = computeHoursWorked(rec.timein, rec.timeout);
+      const hours = computeHoursWorked(rec.timein, rec.timeout, rec.timeout_next_day);
       rows.push({date:ds, day:dayNames[d.getDay()], timein:rec.timein||'-', timeout:rec.timeout||'-', hours:hours});
     }
     d.setDate(d.getDate()+1);

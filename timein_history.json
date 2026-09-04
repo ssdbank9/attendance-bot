@@ -2,35 +2,43 @@
   "records": {
     "2026-08-11": {
       "timein": "08:52:14",
-      "timeout": "20:15:33"
+      "timeout": "20:15:33",
+      "timeout_next_day": true
     },
     "2026-08-12": {
       "timein": "08:47:22",
-      "timeout": "20:08:45"
+      "timeout": "20:08:45",
+      "timeout_next_day": true
     },
     "2026-08-13": {
       "timein": "08:55:01",
-      "timeout": "20:22:18"
+      "timeout": "20:22:18",
+      "timeout_next_day": true
     },
     "2026-08-14": {
       "timein": "08:49:38",
-      "timeout": "20:11:52"
+      "timeout": "20:11:52",
+      "timeout_next_day": true
     },
     "2026-08-17": {
       "timein": "08:51:44",
-      "timeout": "20:18:09"
+      "timeout": "20:18:09",
+      "timeout_next_day": true
     },
     "2026-08-18": {
       "timein": "08:53:29",
-      "timeout": "20:05:41"
+      "timeout": "20:05:41",
+      "timeout_next_day": true
     },
     "2026-08-19": {
       "timein": "13:03:38",
-      "timeout": "21:06:41"
+      "timeout": "21:06:41",
+      "timeout_next_day": true
     },
     "2026-08-20": {
       "timein": "09:03:04",
-      "timeout": "20:05:00"
+      "timeout": "20:05:00",
+      "timeout_next_day": true
     },
     "2026-08-21": {
       "timein": "08:05:00",
@@ -57,12 +65,21 @@
       "timeout": "21:03:25"
     },
     "2026-09-01": {
-      "timein": "08:49:07",
+      "timein": "09:00:00",
       "timeout": "20:07:11"
     },
     "2026-09-02": {
       "timein": "09:10:00",
       "timeout": "16:31:00"
+    },
+    "2026-09-03": {
+      "timein": "08:49:50",
+      "timeout": "09:21:47",
+      "timeout_next_day": true
+    },
+    "2026-09-04": {
+      "timein": "09:16:00",
+      "timeout": "09:21:00"
     }
   }
 }

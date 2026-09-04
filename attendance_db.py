@@ -228,7 +228,7 @@ def export_history_json():
     conn = get_connection()
     try:
         rows = conn.execute(
-            "SELECT date, mode, action_time, observed_time, action_origin "
+            "SELECT date, mode, action_time, observed_time, action_origin, recorded_at "
             "FROM events WHERE status='success' ORDER BY id ASC"
         ).fetchall()
     finally:
@@ -239,6 +239,10 @@ def export_history_json():
         time_val = r["action_time"] or r["observed_time"]
         if time_val:
             records.setdefault(r["date"], {})[r["mode"]] = time_val
+            if r["mode"] == "timeout" and r["recorded_at"]:
+                rec_date = r["recorded_at"][:10]
+                if rec_date > r["date"]:
+                    records[r["date"]]["timeout_next_day"] = True
     _atomic_write_json(HISTORY_FILE, {"records": records})
 
 
