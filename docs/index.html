@@ -171,7 +171,7 @@ select.input{appearance:none;background-image:url("data:image/svg+xml,%3Csvg xml
       <div id="wfh-clock-status" style="font-size:.8rem;color:var(--text2);margin-top:.4rem"></div>
     </div>
     <div class="card">
-      <div class="card-title">Today's Status</div>
+      <div style="display:flex;justify-content:space-between;align-items:center"><div class="card-title">Today's Status</div><button class="btn btn-outline" id="clock-toggle" onclick="toggleClockFmt()" style="font-size:.65rem;padding:.15rem .4rem">12h</button></div>
       <div id="status-content" class="status-grid"></div>
     </div>
     <div class="card">
@@ -863,6 +863,34 @@ function getNextDueLabel() {
   return months[now.getMonth()]+' '+now.getDate();
 }
 
+var _clockFmt = localStorage.getItem('clockFmt') || '24h';
+function to12h(t) {
+  if (!t || t === '--' || t === '-') return t;
+  var parts = t.split(':');
+  var h = parseInt(parts[0], 10);
+  var m = parts[1];
+  var ampm = h >= 12 ? 'PM' : 'AM';
+  h = h % 12 || 12;
+  return h + ':' + m + ' ' + ampm;
+}
+function applyClockFmt() {
+  document.querySelectorAll('.clock-time').forEach(function(el) {
+    var raw = el.getAttribute('data-time24');
+    if (!raw || raw === '--' || raw === '-') return;
+    var nd = el.getAttribute('data-nextday') === 'true';
+    var display = _clockFmt === '12h' ? to12h(raw) : raw;
+    if (nd) display += ' (+1d)';
+    el.textContent = display;
+  });
+  var btn = document.getElementById('clock-toggle');
+  if (btn) btn.textContent = _clockFmt === '24h' ? '12h' : '24h';
+}
+function toggleClockFmt() {
+  _clockFmt = _clockFmt === '24h' ? '12h' : '24h';
+  localStorage.setItem('clockFmt', _clockFmt);
+  applyClockFmt();
+}
+
 function renderStatus() {
   const el = document.getElementById('status-content');
   const st = S.status||{};
@@ -881,8 +909,10 @@ function renderStatus() {
   const toCatchup = !toIsToday && to.status==='success' && to.date && to.date<today;
   const toTime = toFromHist ? hist.timeout.substring(0,5) : (toIsToday ? (to.action_time||to.observed_time||'--') : (toCatchup ? (to.action_time||to.observed_time||'--') : 'Pending'));
   const toSub = toFromHist ? today+' (history)' : (toIsToday ? today+(to.action_origin==='preexisting'?' (pre-existing)':'') : (toCatchup ? to.date+' (catch-up)' : (tiIsToday?'Pending':'')));
-  el.innerHTML = '<div class="status-item"><div class="status-label">Time-In</div><div class="status-value">'+esc(tiTime)+'</div><div class="status-sub">'+esc(tiSub)+'</div></div>'
-    +'<div class="status-item"><div class="status-label">Time-Out</div><div class="status-value">'+esc(toTime)+'</div><div class="status-sub">'+esc(toSub)+'</div></div>';
+  var toNd = !!(hist.timeout_next_day);
+  el.innerHTML = '<div class="status-item"><div class="status-label">Time-In</div><div class="status-value clock-time" data-time24="'+esc(tiTime)+'">'+esc(tiTime)+'</div><div class="status-sub">'+esc(tiSub)+'</div></div>'
+    +'<div class="status-item"><div class="status-label">Time-Out</div><div class="status-value clock-time" data-time24="'+esc(toTime)+'" data-nextday="'+(toNd?'true':'false')+'">'+esc(toTime)+'</div><div class="status-sub">'+esc(toSub)+'</div></div>';
+  applyClockFmt();
 
   // Update button labels with next due date
   var dueLabel = getNextDueLabel();

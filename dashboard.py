@@ -1975,6 +1975,7 @@ def dashboard():
         to_class="done" if to_done else "none",
         to_time=history_rec["timeout"][:5] if to_from_history else ((to.get("action_time") or to.get("observed_time") or "-") if to_done else "-"),
         to_meta=(today + " (history)") if to_from_history else ((today + (" (pre-existing)" if to.get("action_origin") == "preexisting" else "")) if to_done else ("Pending" if ti_done else "")),
+        to_next_day="true" if history_rec.get("timeout_next_day") else "false",
         due_short=due_short, due_date=due_date,
         workdays_html=render_workdays(workdays), holidays_html=render_holidays(upcoming),
         blackout_html=render_blackouts(bl_dates, bl_ranges, wfh_dates, wfh_ranges),
@@ -2102,10 +2103,10 @@ details.collapsible[open] > summary.collapsible-title::after {{transform:rotate(
   <button class="tab-btn" data-tab="settings">Settings</button>
 </div><div class="container">
   <div class="tab-panel active" id="tab-home">
-    <div class="card"><div class="card-title">Today's Status</div>
+    <div class="card"><div style="display:flex;justify-content:space-between;align-items:center"><div class="card-title">Today's Status</div><button class="btn sm outline" id="clock-toggle" onclick="toggleClockFmt()" style="font-size:.65rem;padding:.2rem .5rem">12h</button></div>
       <div class="status-grid">
-        <div class="status-box {ti_class}"><div class="label">Time-In</div><div class="time">{ti_time}</div><div class="meta">{ti_meta}</div></div>
-        <div class="status-box {to_class}"><div class="label">Time-Out</div><div class="time">{to_time}</div><div class="meta">{to_meta}</div></div>
+        <div class="status-box {ti_class}"><div class="label">Time-In</div><div class="time clock-time" data-time24="{ti_time}">{ti_time}</div><div class="meta">{ti_meta}</div></div>
+        <div class="status-box {to_class}"><div class="label">Time-Out</div><div class="time clock-time" data-time24="{to_time}" data-nextday="{to_next_day}">{to_time}</div><div class="meta">{to_meta}</div></div>
       </div>{clock_row}</div>
     <div class="card"><div class="card-title">Today's Actions</div>
       <div class="quick-actions">
@@ -2321,6 +2322,36 @@ details.collapsible[open] > summary.collapsible-title::after {{transform:rotate(
 (function(){{
   var t=document.getElementById('toast');
   if(t){{setTimeout(function(){{t.style.transition='opacity .4s';t.style.opacity='0';setTimeout(function(){{t.remove()}},400)}},3500)}}
+  // Clock format toggle
+  window._clockFmt = localStorage.getItem('clockFmt') || '24h';
+  function to12h(t) {{
+    if (!t || t === '-') return t;
+    var parts = t.split(':');
+    var h = parseInt(parts[0], 10);
+    var m = parts[1];
+    var ampm = h >= 12 ? 'PM' : 'AM';
+    h = h % 12 || 12;
+    return h + ':' + m + ' ' + ampm;
+  }}
+  function applyClockFmt() {{
+    var fmt = window._clockFmt;
+    document.querySelectorAll('.clock-time').forEach(function(el) {{
+      var raw = el.getAttribute('data-time24');
+      if (!raw || raw === '-') return;
+      var nd = el.getAttribute('data-nextday') === 'true';
+      var display = fmt === '12h' ? to12h(raw) : raw;
+      if (nd) display += ' (+1d)';
+      el.textContent = display;
+    }});
+    var btn = document.getElementById('clock-toggle');
+    if (btn) btn.textContent = fmt === '24h' ? '12h' : '24h';
+  }}
+  window.toggleClockFmt = function() {{
+    window._clockFmt = window._clockFmt === '24h' ? '12h' : '24h';
+    localStorage.setItem('clockFmt', window._clockFmt);
+    applyClockFmt();
+  }};
+  applyClockFmt();
   setInterval(function(){{
     var n=pkNow();
     var hh=String(n.getHours()).padStart(2,'0');
