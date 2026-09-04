@@ -1,18 +1,17 @@
 {
   "timein": {
-    "date": "2026-09-03",
-    "status": "success",
-    "message": "Time-In marked at 08:49:50",
-    "timestamp": "2026-09-03 08:49:50",
-    "action_origin": "bot",
-    "action_time": "08:49:50"
+    "date": "2026-09-04",
+    "status": "skipped",
+    "message": "Time-In window closed at 09:20 - not marking at 09:21",
+    "timestamp": "2026-09-04 09:21:49",
+    "action_origin": "bot"
   },
   "timeout": {
     "date": "2026-09-03",
     "status": "success",
-    "message": "Time-Out marked at 09:21:46 (completed pending 03-Sep-2026)",
-    "timestamp": "2026-09-04 09:21:46",
+    "message": "Time-Out marked at 09:21:47 (completed pending 03-Sep-2026)",
+    "timestamp": "2026-09-04 09:21:47",
     "action_origin": "bot",
-    "action_time": "09:21:46"
+    "action_time": "09:21:47"
   }
 }
