@@ -14,9 +14,11 @@ The desktop on the AKU network is the authority for attendance execution:
 4. At the target time it calls the AKU private API. If the direct path fails, it uses the saved portal page through headless Edge and verifies the result through the API.
 5. Only allowlisted AKU success response shapes are accepted. An empty, malformed, maintenance, HTML, or otherwise unknown response fails closed and is retried.
 6. Successful, failed, and skipped events are recorded in local SQLite (`attendance.db`). `attendance_db.py` regenerates `timein_status.json` and `timein_history.json` from that database.
-7. `cloud_sync.py` can push allowlisted, non-credential JSON files to GitHub. The self-hosted attendance workflow provides a fallback execution path; the GitHub-hosted deadman workflow reads synced state and alerts when a legal working day has no Time-In.
+7. `cloud_sync.py` synchronizes allowlisted, non-credential JSON files with GitHub bidirectionally: it pushes status, holidays, and configuration to the repository, and pulls `blackout.json`, `leave_balance.json`, and `notification_prefs.json` from it so that edits made through the GitHub Pages dashboard propagate back to the desktop. The self-hosted attendance workflow provides a fallback execution path; the GitHub-hosted deadman workflow reads synced state and alerts when a legal working day has no Time-In.
 
 The local Flask dashboard (`dashboard.py`) manages credentials, time windows, holidays, blackouts, leave, notification settings, and pause state. `dashboard_watchdog.py` keeps it serving. The static GitHub Pages dashboard in `docs/index.html` talks directly to the GitHub Contents and Actions APIs; it never receives the AKU credentials.
+
+The bot skips WFH days (no attendance is marked), and both dashboards provide a WFH clock that records hours for personal analytics only. Both dashboards also offer an attendance correction form for recording manual corrections and a pre-filled correction email composer for notifying the attendance administrator.
 
 The intended execution hierarchy is:
 
@@ -212,8 +214,8 @@ Other state files:
 | `timein_history.json` | Exported successful bot-owned action history; tracked and read by dashboards |
 | `blackout.json` | Skip dates, ranges, leave entries, and working weekends |
 | `holidays.json` | Holiday calendar, confirmation, moon-dependent, and disabled state |
-| `leave_balance.json` | Repository-facing leave balance projection |
-| `notification_prefs.json` | Notification switches and optional admin email |
+| `leave_balance.json` | Leave entitlements and balance; bidirectionally synced with GitHub |
+| `notification_prefs.json` | Notification toggles and admin email for correction requests; bidirectionally synced with GitHub |
 | `bot_config.json` | Repository-facing `paused` plus PKT `updated_at`; the deadman honors a valid boolean pause indefinitely, and reports an unusually old one as a warning rather than alerting |
 | `.dashboard_auth_token` | Generated local dashboard login secret; gitignored |
 
@@ -229,7 +231,7 @@ There are six persistent task definitions plus the dynamic one-shot role used du
 | `TimeInBot_TimeOut` | Daily 20:00 | Starts `timein_bot.py timeout`; wake enabled |
 | `TimeInBot_HolidayReminder` | Daily 19:00 | Runs `holiday_reminder.py holidays` |
 | `TimeInBot_TomorrowPlan` | Daily 22:00 | Runs `holiday_reminder.py tomorrow` |
-| `TimeInBot_DashboardWatchdog` | At logon and every five minutes from 00:05 | Health-checks and relaunches the dashboard |
+| `TimeInBot_DashboardWatchdog` | At logon and every 45 minutes | Health-checks and relaunches the dashboard |
 | `TimeInBot_Dashboard` | At logon | Starts the same watchdog path for compatibility/startup reliability |
 | `TimeInBot_OneShot_timein` / `TimeInBot_OneShot_timeout` | Dynamically registered at the randomized target | Wake-capable real attendance action with `--scheduled`; expires after execution |
 
