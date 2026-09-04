@@ -763,12 +763,15 @@ function renderStatus() {
   const st = S.status||{};
   const ti = st.timein||{};
   const to = st.timeout||{};
-  const tiTime = ti.action_time||st.timein_time||'--';
-  const tiDate = ti.date||st.date||'--';
-  const toTime = to.action_time||'Pending';
-  const toDate = to.date||'';
-  el.innerHTML = '<div class="status-item"><div class="status-label">Time-In</div><div class="status-value">'+esc(tiTime)+'</div><div class="status-sub">'+esc(tiDate)+'</div></div>'
-    +'<div class="status-item"><div class="status-label">Time-Out</div><div class="status-value">'+esc(toTime)+'</div><div class="status-sub">'+esc(toDate)+'</div></div>';
+  const today = pkNow().getFullYear()+'-'+String(pkNow().getMonth()+1).padStart(2,'0')+'-'+String(pkNow().getDate()).padStart(2,'0');
+  const tiIsToday = ti.date===today && ti.status==='success';
+  const toIsToday = to.date===today && to.status==='success';
+  const tiTime = tiIsToday ? (ti.action_time||ti.observed_time||'--') : '--';
+  const tiSub = tiIsToday ? today+(ti.action_origin==='preexisting'?' (pre-existing)':'') : (ti.date===today&&ti.status?ti.status:'--');
+  const toTime = toIsToday ? (to.action_time||to.observed_time||'--') : 'Pending';
+  const toSub = toIsToday ? today+(to.action_origin==='preexisting'?' (pre-existing)':'') : (tiIsToday?'Pending':'');
+  el.innerHTML = '<div class="status-item"><div class="status-label">Time-In</div><div class="status-value">'+esc(tiTime)+'</div><div class="status-sub">'+esc(tiSub)+'</div></div>'
+    +'<div class="status-item"><div class="status-label">Time-Out</div><div class="status-value">'+esc(toTime)+'</div><div class="status-sub">'+esc(toSub)+'</div></div>';
 
   const paused = (S.botConfig||{}).paused;
   const pauseBtn = document.getElementById('pause-btn');
