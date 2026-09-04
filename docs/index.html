@@ -158,12 +158,13 @@ select.input{appearance:none;background-image:url("data:image/svg+xml,%3Csvg xml
       <button class="btn btn-outline full" style="margin-top:.5rem;border-color:#e67e22;color:#e67e22" onclick="snoozeTomorrow()">Snooze Tomorrow (2h)</button>
     </div>
     <div class="card" id="wfh-clock-card" style="display:none">
-      <div class="card-title" style="color:#2196F3">WFH Clock</div>
-      <div style="display:flex;gap:.5rem;margin-bottom:.5rem">
-        <button class="btn btn-primary" style="flex:1;background:#2196F3" id="wfh-in-btn" onclick="wfhClockIn()">Clock In</button>
-        <button class="btn btn-outline" style="flex:1;border-color:#2196F3;color:#2196F3" id="wfh-out-btn" onclick="wfhClockOut()">Clock Out</button>
+      <div class="card-title" style="color:#2196F3">WFH Hours <span style="font-size:.7rem;font-weight:400;color:var(--text2)">(analytics only)</span></div>
+      <div style="display:flex;gap:.5rem;align-items:flex-end;margin-bottom:.5rem">
+        <div style="flex:1"><label style="font-size:.75rem;color:var(--text2)">Time In</label><input class="input" type="time" id="wfh-ti-time" value="09:00"></div>
+        <div style="flex:1"><label style="font-size:.75rem;color:var(--text2)">Time Out</label><input class="input" type="time" id="wfh-to-time" value="18:00"></div>
       </div>
-      <div id="wfh-clock-status" style="font-size:.8rem;color:var(--text2)"></div>
+      <button class="btn full" style="background:#2196F3;color:#fff" id="wfh-save-btn" onclick="saveWfhHours()">Save WFH Hours</button>
+      <div id="wfh-clock-status" style="font-size:.8rem;color:var(--text2);margin-top:.4rem"></div>
     </div>
     <div class="card">
       <div class="card-title">Today's Status</div>
@@ -1625,19 +1626,27 @@ function renderWfhClock() {
   var today = pkNow().getFullYear()+'-'+String(pkNow().getMonth()+1).padStart(2,'0')+'-'+String(pkNow().getDate()).padStart(2,'0');
   var rec = (S.history||{})[today]||{};
   var statusEl = document.getElementById('wfh-clock-status');
-  var inBtn = document.getElementById('wfh-in-btn');
-  var outBtn = document.getElementById('wfh-out-btn');
-  var parts = [];
-  if (rec.timein) { parts.push('In: '+rec.timein.slice(0,5)); inBtn.disabled=true; inBtn.textContent='Clocked In'; }
-  else { inBtn.disabled=false; inBtn.textContent='Clock In'; }
-  if (rec.timeout) { parts.push('Out: '+rec.timeout.slice(0,5)); outBtn.disabled=true; outBtn.textContent='Clocked Out'; }
-  else { outBtn.disabled=false; outBtn.textContent='Clock Out'; }
-  statusEl.textContent = parts.length ? parts.join(' | ') : 'Not clocked in yet';
+  var saveBtn = document.getElementById('wfh-save-btn');
+  if (rec.timein && rec.timeout) {
+    document.getElementById('wfh-ti-time').value = rec.timein.slice(0,5);
+    document.getElementById('wfh-to-time').value = rec.timeout.slice(0,5);
+    saveBtn.textContent = 'Update WFH Hours';
+    statusEl.textContent = 'Saved: '+rec.timein.slice(0,5)+' - '+rec.timeout.slice(0,5);
+  } else if (rec.timein) {
+    document.getElementById('wfh-ti-time').value = rec.timein.slice(0,5);
+    saveBtn.textContent = 'Save WFH Hours';
+    statusEl.textContent = 'Time-In saved: '+rec.timein.slice(0,5)+' (no Time-Out yet)';
+  } else {
+    saveBtn.textContent = 'Save WFH Hours';
+    statusEl.textContent = '';
+  }
 }
 
-async function wfhClockIn() {
+async function saveWfhHours() {
   var today = pkNow().getFullYear()+'-'+String(pkNow().getMonth()+1).padStart(2,'0')+'-'+String(pkNow().getDate()).padStart(2,'0');
-  var now = String(pkNow().getHours()).padStart(2,'0')+':'+String(pkNow().getMinutes()).padStart(2,'0')+':'+String(pkNow().getSeconds()).padStart(2,'0');
+  var tiVal = document.getElementById('wfh-ti-time').value;
+  var toVal = document.getElementById('wfh-to-time').value;
+  if (!tiVal) { showToast('Enter a Time-In','error'); return; }
   try {
     var histPath = 'timein_history.json';
     var r = await fetch('https://api.github.com/repos/'+GH.repo+'/contents/'+histPath, {headers:GH.headers()});
@@ -1645,41 +1654,18 @@ async function wfhClockIn() {
     var histData = JSON.parse(atob(meta.content));
     if (!histData.records) histData.records = {};
     if (!histData.records[today]) histData.records[today] = {};
-    if (histData.records[today].timein) { showToast('Already clocked in at '+histData.records[today].timein.slice(0,5),'error'); return; }
-    histData.records[today].timein = now;
+    histData.records[today].timein = tiVal+':00';
+    if (toVal) histData.records[today].timeout = toVal+':00';
     var encoded = btoa(unescape(encodeURIComponent(JSON.stringify(histData,null,2))));
+    var parts = ['In='+tiVal];
+    if (toVal) parts.push('Out='+toVal);
     var wr = await fetch('https://api.github.com/repos/'+GH.repo+'/contents/'+histPath, {
       method:'PUT', headers:GH.headers(),
-      body:JSON.stringify({message:'WFH clock-in '+today+' at '+now.slice(0,5)+' (mobile)', content:encoded, sha:meta.sha})
+      body:JSON.stringify({message:'WFH hours '+today+': '+parts.join(', ')+' (mobile)', content:encoded, sha:meta.sha})
     });
     if (!wr.ok) throw new Error('Write failed: '+wr.status);
     S.history = histData.records;
-    showToast('WFH clocked in at '+now.slice(0,5),'ok');
-    renderWfhClock();
-  } catch(e) { showToast('Failed: '+e.message,'error'); }
-}
-
-async function wfhClockOut() {
-  var today = pkNow().getFullYear()+'-'+String(pkNow().getMonth()+1).padStart(2,'0')+'-'+String(pkNow().getDate()).padStart(2,'0');
-  var now = String(pkNow().getHours()).padStart(2,'0')+':'+String(pkNow().getMinutes()).padStart(2,'0')+':'+String(pkNow().getSeconds()).padStart(2,'0');
-  var rec = (S.history||{})[today]||{};
-  if (!rec.timein) { showToast('Clock in first','error'); return; }
-  try {
-    var histPath = 'timein_history.json';
-    var r = await fetch('https://api.github.com/repos/'+GH.repo+'/contents/'+histPath, {headers:GH.headers()});
-    var meta = await r.json();
-    var histData = JSON.parse(atob(meta.content));
-    if (!histData.records) histData.records = {};
-    if (!histData.records[today]) histData.records[today] = {};
-    histData.records[today].timeout = now;
-    var encoded = btoa(unescape(encodeURIComponent(JSON.stringify(histData,null,2))));
-    var wr = await fetch('https://api.github.com/repos/'+GH.repo+'/contents/'+histPath, {
-      method:'PUT', headers:GH.headers(),
-      body:JSON.stringify({message:'WFH clock-out '+today+' at '+now.slice(0,5)+' (mobile)', content:encoded, sha:meta.sha})
-    });
-    if (!wr.ok) throw new Error('Write failed: '+wr.status);
-    S.history = histData.records;
-    showToast('WFH clocked out at '+now.slice(0,5),'ok');
+    showToast('WFH hours saved: '+parts.join(', '),'ok');
     renderWfhClock();
   } catch(e) { showToast('Failed: '+e.message,'error'); }
 }

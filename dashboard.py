@@ -1133,37 +1133,32 @@ def action_cancel_wfh_tomorrow():
     return redirect(url_for("dashboard", msg=f"WFH cancelled for tomorrow ({tomorrow_str})"))
 
 
-@app.route("/action/wfh-timein", methods=["POST"])
-def action_wfh_timein():
+@app.route("/action/wfh-hours", methods=["POST"])
+def action_wfh_hours():
+    """Save WFH hours (analytics only) - user picks both times."""
     today_str = pk_now().strftime("%Y-%m-%d")
-    now_time = pk_now().strftime("%H:%M:%S")
-    from attendance_db import record_event, get_latest
-    existing = get_latest("timein", today_str)
-    if existing and existing.get("action_origin") == "wfh":
-        return redirect(url_for("dashboard", msg=f"WFH clock-in already recorded at {existing.get('action_time', '?')}"))
-    record_event(today_str, "timein", "success", "WFH clock-in",
-                 action_time=now_time, action_origin="wfh")
-    from notify import notify
-    notify(f"WFH clock-in at {now_time}", title="WFH Clock In", tags="house,clock1")
-    return redirect(url_for("dashboard", msg=f"WFH clock-in recorded at {now_time}"))
-
-
-@app.route("/action/wfh-timeout", methods=["POST"])
-def action_wfh_timeout():
-    today_str = pk_now().strftime("%Y-%m-%d")
-    now_time = pk_now().strftime("%H:%M:%S")
-    from attendance_db import record_event, get_latest
-    existing_in = get_latest("timein", today_str)
-    if not existing_in or existing_in.get("action_origin") != "wfh":
-        return redirect(url_for("dashboard", msg="No WFH clock-in found for today. Clock in first."))
-    existing_out = get_latest("timeout", today_str)
-    if existing_out and existing_out.get("action_origin") == "wfh":
-        return redirect(url_for("dashboard", msg=f"WFH clock-out already recorded at {existing_out.get('action_time', '?')}"))
-    record_event(today_str, "timeout", "success", "WFH clock-out",
-                 action_time=now_time, action_origin="wfh")
-    from notify import notify
-    notify(f"WFH clock-out at {now_time}", title="WFH Clock Out", tags="house,clock1")
-    return redirect(url_for("dashboard", msg=f"WFH clock-out recorded at {now_time}"))
+    ti_val = request.form.get("wfh_ti", "").strip()
+    to_val = request.form.get("wfh_to", "").strip()
+    if not ti_val:
+        return redirect(url_for("dashboard", msg="Enter a Time-In for WFH hours"))
+    from attendance_db import record_event
+    parts = []
+    ti_time = ti_val + ":00"
+    record_event(today_str, "timein", "success", "WFH hours (manual)",
+                 action_time=ti_time, action_origin="wfh")
+    parts.append(f"In={ti_val}")
+    if to_val:
+        to_time = to_val + ":00"
+        record_event(today_str, "timeout", "success", "WFH hours (manual)",
+                     action_time=to_time, action_origin="wfh")
+        parts.append(f"Out={to_val}")
+    try:
+        from cloud_sync import sync_status, push_all
+        sync_status()
+        push_all()
+    except Exception:
+        pass
+    return redirect(url_for("dashboard", msg=f"WFH hours saved: {', '.join(parts)}"))
 
 
 @app.route("/api/wfh-clock-status")
@@ -2047,12 +2042,15 @@ details.collapsible[open] > summary.collapsible-title::after {{transform:rotate(
   <div class="tab-panel" id="tab-holidays">
     <div class="card"><div class="card-title">Active Skips</div>{blackout_html}</div>
     <div class="card" id="wfh-clock-card" style="display:none">
-      <div class="card-title" style="color:var(--wfh-color,#2196F3)">WFH Clock</div>
+      <div class="card-title" style="color:var(--wfh-color,#2196F3)">WFH Hours <span style="font-size:.7rem;font-weight:400;color:var(--text2)">(analytics only)</span></div>
       <div id="wfh-clock-body">
-        <div class="wfh-clock">
-          <form action="/action/wfh-timein" method="POST" style="flex:1"><button type="submit" class="btn full" id="wfh-in-btn">Clock In</button></form>
-          <form action="/action/wfh-timeout" method="POST" style="flex:1"><button type="submit" class="btn full outline" id="wfh-out-btn">Clock Out</button></form>
-        </div>
+        <form action="/action/wfh-hours" method="POST">
+          <div style="display:flex;gap:.5rem;align-items:flex-end;margin-bottom:.5rem">
+            <div style="flex:1"><label style="font-size:.75rem;color:var(--text2)">Time In</label><input type="time" name="wfh_ti" id="wfh-ti-time" value="09:00" class="input"></div>
+            <div style="flex:1"><label style="font-size:.75rem;color:var(--text2)">Time Out</label><input type="time" name="wfh_to" id="wfh-to-time" value="18:00" class="input"></div>
+          </div>
+          <button type="submit" class="btn full" id="wfh-save-btn" style="background:var(--wfh-color,#2196F3);color:#fff">Save WFH Hours</button>
+        </form>
         <div class="wfh-clock-status" id="wfh-clock-status-text"></div>
       </div>
     </div>
@@ -2624,21 +2622,15 @@ details.collapsible[open] > summary.collapsible-title::after {{transform:rotate(
 function loadWfhClock() {{
   fetch('/api/wfh-clock-status').then(function(r){{return r.json()}}).then(function(d) {{
     var card = document.getElementById('wfh-clock-card');
-    if (!d.is_wfh_today) {{ card.style.display = 'none'; return; }}
-    card.style.display = '';
-    var inBtn = document.getElementById('wfh-in-btn');
-    var outBtn = document.getElementById('wfh-out-btn');
-    var status = document.getElementById('wfh-clock-status-text');
-    if (d.clocked_in) {{
-      inBtn.disabled = true; inBtn.textContent = 'Clocked In ' + d.clocked_in;
-      outBtn.disabled = !!d.clocked_out;
-      if (d.clocked_out) {{ outBtn.textContent = 'Clocked Out ' + d.clocked_out; }}
-    }}
+    if (!d.is_wfh_today) {{ card.style.display='none'; return; }}
+    card.style.display='';
+    var statusEl = document.getElementById('wfh-clock-status-text');
     var parts = [];
-    if (d.clocked_in) {{ parts.push('In: ' + d.clocked_in); }}
-    if (d.clocked_out) {{ parts.push('Out: ' + d.clocked_out); }}
-    status.textContent = parts.length ? parts.join(' | ') : 'Not clocked in yet';
-  }}).catch(function(){{}});
+    if (d.clocked_in) {{ document.getElementById('wfh-ti-time').value=d.clocked_in.slice(0,5); parts.push('In: '+d.clocked_in.slice(0,5)); }}
+    if (d.clocked_out) {{ document.getElementById('wfh-to-time').value=d.clocked_out.slice(0,5); parts.push('Out: '+d.clocked_out.slice(0,5)); }}
+    if (parts.length) {{ statusEl.textContent='Saved: '+parts.join(' | '); document.getElementById('wfh-save-btn').textContent='Update WFH Hours'; }}
+    else {{ statusEl.textContent=''; }}
+  }});
 }}
 </script>
 </body></html>"""
