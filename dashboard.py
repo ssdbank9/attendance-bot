@@ -228,7 +228,8 @@ def next_due_date():
     """Return (YYYY-MM-DD, short_label) for the next date attendance is due.
 
     Walks forward from today skipping weekends (unless working weekend),
-    holidays, blackout dates/ranges, and WFH dates/ranges.
+    holidays, blackout dates/ranges, WFH dates/ranges, and dates where
+    both time-in and time-out are already recorded.
     """
     from datetime import timedelta
     d = pk_now()
@@ -240,6 +241,8 @@ def next_due_date():
     working_wkends = set(blackout.get("working_weekends", []))
     wfh_dates = {w["date"] for w in blackout.get("wfh", [])}
     wfh_ranges = blackout.get("wfh_ranges", [])
+    history = load_json(HISTORY_FILE).get("records", {})
+    status = load_json(STATUS_FILE)
     for _ in range(60):
         ds = d.strftime("%Y-%m-%d")
         skip = False
@@ -263,6 +266,18 @@ def next_due_date():
                         skip = True
                         break
         if not skip:
+            rec = history.get(ds, {})
+            ti_done = bool(rec.get("timein"))
+            to_done = bool(rec.get("timeout"))
+            if not ti_done:
+                ti_st = status.get("timein", {})
+                ti_done = ti_st.get("date") == ds and ti_st.get("status") == "success"
+            if not to_done:
+                to_st = status.get("timeout", {})
+                to_done = to_st.get("date") == ds and to_st.get("status") == "success"
+            if ti_done and to_done:
+                d += timedelta(days=1)
+                continue
             short = d.strftime("%b ") + str(d.day)
             return ds, short
         d += timedelta(days=1)

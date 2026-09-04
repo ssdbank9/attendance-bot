@@ -833,6 +833,8 @@ function getNextDueLabel() {
   var wfhDates = new Set();
   (bl.wfh||[]).forEach(function(w){ wfhDates.add(w.date); });
   var wfhRanges = bl.wfh_ranges||[];
+  var hist = (S.history||{}).records||{};
+  var st = S.status||{};
   var d = pkNow();
   for (var i=0; i<60; i++) {
     var ds = d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0');
@@ -846,7 +848,15 @@ function getNextDueLabel() {
       if (wfhDates.has(ds)) skip = true;
       else { for (var k=0; k<wfhRanges.length; k++) { if ((wfhRanges[k].start||'')<=ds && ds<=(wfhRanges[k].end||'')) { skip=true; break; } } }
     }
-    if (!skip) return months[d.getMonth()]+' '+d.getDate();
+    if (!skip) {
+      var rec = hist[ds]||{};
+      var tiDone = !!rec.timein;
+      var toDone = !!rec.timeout;
+      if (!tiDone) { var tis = st.timein||{}; tiDone = tis.date===ds && tis.status==='success'; }
+      if (!toDone) { var tos = st.timeout||{}; toDone = tos.date===ds && tos.status==='success'; }
+      if (tiDone && toDone) { d = new Date(d.getTime()+86400000); continue; }
+      return months[d.getMonth()]+' '+d.getDate();
+    }
     d = new Date(d.getTime()+86400000);
   }
   var now = pkNow();
