@@ -59,9 +59,11 @@ nav button.active{color:var(--primary);border-bottom-color:var(--primary)}
 .badge-skip{background:var(--orange);color:#fff}
 .badge-off{background:var(--text2);color:#fff;opacity:.6}
 .badge-leave{background:var(--primary);color:#fff}
+.badge-wfh{background:#2196F3;color:#fff}
 .skip-item{display:flex;justify-content:space-between;align-items:center;padding:.5rem 0;border-bottom:1px solid var(--border)}
 .skip-item:last-child{border:none}
 .skip-info{font-size:.85rem}.skip-date{font-size:.7rem;color:var(--text2)}
+.wfh-row{border-left:3px solid #2196F3;padding-left:.5rem}.wfh-badge{background:#2196F3;color:#fff;font-size:.65rem;font-weight:700;padding:.1rem .4rem;border-radius:3px;text-transform:uppercase;letter-spacing:.03em;margin-right:.3rem;vertical-align:middle}
 .hol-item{padding:.45rem 0;border-bottom:1px solid var(--border);font-size:.85rem}
 .hol-item:last-child{border:none}
 .hol-date{font-size:.7rem;color:var(--text2)}
@@ -153,6 +155,7 @@ select.input{appearance:none;background-image:url("data:image/svg+xml,%3Csvg xml
         <button class="btn btn-outline" style="flex:1" onclick="triggerAction('timeout')">Time Out Now</button>
       </div>
       <button class="btn full" id="pause-btn" onclick="togglePause()">Pause Bot</button>
+      <button class="btn btn-outline full" style="margin-top:.5rem;border-color:#e67e22;color:#e67e22" onclick="snoozeTomorrow()">Snooze Tomorrow (2h)</button>
     </div>
     <div class="card">
       <div class="card-title">Today's Status</div>
@@ -218,6 +221,22 @@ select.input{appearance:none;background-image:url("data:image/svg+xml,%3Csvg xml
         <input class="input" type="text" id="skip-reason" placeholder="e.g. Doctor appointment">
       </div>
       <button class="btn btn-outline" onclick="addSkip()">Add Skip</button>
+    </div>
+    <div class="card">
+      <div class="card-title">Work From Home</div>
+      <div class="form-group">
+        <label>Start Date</label>
+        <input class="input" type="date" id="wfh-date">
+      </div>
+      <div class="form-group">
+        <label>End Date <span style="color:var(--text2);font-weight:400">(optional, for a range)</span></label>
+        <input class="input" type="date" id="wfh-end-date">
+      </div>
+      <div class="form-group">
+        <label>Reason</label>
+        <input class="input" type="text" id="wfh-reason" placeholder="e.g. Doctor appointment nearby">
+      </div>
+      <button class="btn btn-outline" style="border-color:#2196F3;color:#2196F3" onclick="addWfh()">Add WFH</button>
     </div>
   </div>
 
@@ -315,6 +334,15 @@ select.input{appearance:none;background-image:url("data:image/svg+xml,%3Csvg xml
         <input class="input" type="email" id="set-admin-email" placeholder="admin@company.com">
       </div>
       <button class="btn btn-primary" onclick="saveNotifPrefs()">Save Notification Settings</button>
+    </div>
+    <div class="card">
+      <div class="card-title">Ntfy Topic (for Snooze)</div>
+      <p style="font-size:.75rem;color:var(--text2);margin-bottom:.5rem">Your ntfy topic for sending snooze reminders directly from this page. Stored locally in your browser only.</p>
+      <div class="form-group">
+        <label>Topic</label>
+        <input class="input" type="text" id="set-ntfy-topic" placeholder="e.g. timeinbot-12345-abc">
+      </div>
+      <button class="btn btn-outline" onclick="saveNtfyTopic()">Save Topic</button>
     </div>
     <div class="card">
       <div class="card-title">About</div>
@@ -762,6 +790,9 @@ function getNextDays(n) {
   const blEntries = {};
   ((S.blackout||{}).dates||[]).forEach(function(b){blEntries[b.date]=b});
   const wkends = new Set((S.blackout||{}).working_weekends||[]);
+  const wfhMap = {};
+  ((S.blackout||{}).wfh||[]).forEach(function(w){wfhMap[w.date]=w});
+  const wfhRangeList = (S.blackout||{}).wfh_ranges||[];
   for (let i=0;i<n;i++){
     const ds = d.toISOString().slice(0,10);
     const wd = d.getDay();
@@ -778,6 +809,12 @@ function getNextDays(n) {
         cls = 'badge-leave';
       } else { label='Skip'; cls='badge-skip'; }
       skip = label;
+    }
+    if (!skip) {
+      var isWfh = false;
+      if (wfhMap[ds]) { isWfh = true; }
+      else { for (var j=0;j<wfhRangeList.length;j++) { if (wfhRangeList[j].start<=ds && ds<=wfhRangeList[j].end) { isWfh = true; break; } } }
+      if (isWfh) { label='WFH'; cls='badge-wfh'; }
     }
     const dayNames = ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'];
     const monthNames = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
@@ -800,25 +837,41 @@ function renderForecast() {
 function renderSkips() {
   const el = document.getElementById('skips-content');
   const dates = ((S.blackout||{}).dates||[]).filter(function(d){return isIsoDate(d.date)&&d.date>=today()});
-  if (!dates.length) { el.innerHTML='<div class="empty">No active leaves or skips</div>'; return; }
+  const ranges = ((S.blackout||{}).ranges||[]).filter(function(r){return isIsoDate(r.start)&&isIsoDate(r.end)&&r.end>=today()});
+  const wfhDates = ((S.blackout||{}).wfh||[]).filter(function(d){return isIsoDate(d.date)&&d.date>=today()});
+  const wfhRanges = ((S.blackout||{}).wfh_ranges||[]).filter(function(r){return isIsoDate(r.start)&&isIsoDate(r.end)&&r.end>=today()});
+  if (!dates.length && !ranges.length && !wfhDates.length && !wfhRanges.length) {
+    el.innerHTML='<div class="empty">No active leaves, skips, or WFH</div>'; return;
+  }
   let h = '';
   dates.sort(function(a,b){return a.date.localeCompare(b.date)});
   dates.forEach(function(d){
     const dt = new Date(d.date+'T12:00:00');
     const dayStr = ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'][dt.getDay()];
     const monthStr = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'][dt.getMonth()];
-    const daysLabel = d.days===0.5?' (\u00bd day)':'';
+    const daysLabel = d.days===0.5?' \u00bd':'';
     h += '<div class="skip-item"><div><div class="skip-info">'+esc(d.reason)+daysLabel+'</div><div class="skip-date">'+dayStr+' '+monthStr+' '+dt.getDate()+'</div></div>'
       +'<button class="btn btn-sm btn-danger" onclick="cancelSkip(\''+d.date+'\')">Cancel</button></div>';
   });
-  const ranges = ((S.blackout||{}).ranges||[]).filter(function(r){return isIsoDate(r.start)&&isIsoDate(r.end)&&r.end>=today()});
   ranges.sort(function(a,b){return a.start.localeCompare(b.start)});
   ranges.forEach(function(r){
     h += '<div class="skip-item"><div><div class="skip-info">'+esc(r.reason)+'</div><div class="skip-date">'+esc(r.start)+' to '+esc(r.end)+'</div></div>'
       +'<button class="btn btn-sm btn-danger" onclick="cancelRange(\''+r.start+'\',\''+r.end+'\')">Cancel</button></div>';
   });
-  if (!dates.length && !ranges.length) { el.innerHTML='<div class="empty">No active leaves or skips</div>'; }
-  else { el.innerHTML = h; }
+  wfhDates.sort(function(a,b){return a.date.localeCompare(b.date)});
+  wfhDates.forEach(function(d){
+    const dt = new Date(d.date+'T12:00:00');
+    const dayStr = ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'][dt.getDay()];
+    const monthStr = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'][dt.getMonth()];
+    h += '<div class="skip-item wfh-row"><div><div class="skip-info"><span class="wfh-badge">WFH</span>'+esc(d.reason)+'</div><div class="skip-date">'+dayStr+' '+monthStr+' '+dt.getDate()+'</div></div>'
+      +'<button class="btn btn-sm btn-danger" onclick="cancelWfh(\''+d.date+'\')">Cancel</button></div>';
+  });
+  wfhRanges.sort(function(a,b){return a.start.localeCompare(b.start)});
+  wfhRanges.forEach(function(r){
+    h += '<div class="skip-item wfh-row"><div><div class="skip-info"><span class="wfh-badge">WFH</span>'+esc(r.reason)+'</div><div class="skip-date">'+esc(r.start)+' to '+esc(r.end)+'</div></div>'
+      +'<button class="btn btn-sm btn-danger" onclick="cancelWfhRange(\''+r.start+'\',\''+r.end+'\')">Cancel</button></div>';
+  });
+  el.innerHTML = h;
 }
 
 function renderHolidays() {
@@ -967,6 +1020,8 @@ function renderSettings() {
   document.getElementById('set-er').value = (lb.earned||{}).remaining||23;
   document.getElementById('set-cfl').value = ((lb.earned||{}).carry_forward_limit)||5;
   document.getElementById('set-cf').value = (lb.earned||{}).carried_forward||0;
+
+  document.getElementById('set-ntfy-topic').value = localStorage.getItem('ntfy_topic')||'';
 
   const prefs = (S.notifPrefs||{}).preferences||{};
   const rows = Object.keys(NOTIF_PREF_LABELS).map(key => {
@@ -1194,6 +1249,121 @@ async function cancelRange(start, end) {
   localStorage.setItem(CACHE_KEY, JSON.stringify(S));
   renderAll();
   showToast('Range cancelled','ok');
+}
+
+
+
+async function addWfh() {
+  var start = document.getElementById('wfh-date').value;
+  var end = document.getElementById('wfh-end-date').value || start;
+  var reason = document.getElementById('wfh-reason').value.trim()||'Work from home';
+  if (!start) { showToast('Select a date','error'); return; }
+  if (start > end) { var t=start; start=end; end=t; }
+
+  if (!S.blackout.wfh) S.blackout.wfh = [];
+  if (!S.blackout.wfh_ranges) S.blackout.wfh_ranges = [];
+  var wfhKind = '';
+  var wfhEntry = null;
+
+  if (start === end) {
+    if (S.blackout.wfh.find(function(d){return d.date===start})) { showToast('Date already marked WFH','error'); return; }
+    wfhKind = 'date';
+    wfhEntry = {date:start, reason:reason, added:pkNow().toISOString().slice(0,16).replace('T',' ')};
+    S.blackout.wfh.push(wfhEntry);
+    S.blackout.wfh.sort(function(a,b){return a.date.localeCompare(b.date)});
+  } else {
+    if (S.blackout.wfh_ranges.find(function(r){return r.start===start && r.end===end})) { showToast('WFH range already added','error'); return; }
+    wfhKind = 'range';
+    wfhEntry = {start:start, end:end, reason:reason, added:pkNow().toISOString().slice(0,16).replace('T',' ')};
+    S.blackout.wfh_ranges.push(wfhEntry);
+    S.blackout.wfh_ranges.sort(function(a,b){return a.start.localeCompare(b.start)});
+  }
+
+  showToast('Adding WFH...','ok');
+  var r = await GH.writeFile('blackout.json', S.blackout, S.shas.blackout, 'WFH '+start+(end!==start?' to '+end:'')+': '+reason+' (mobile)', function(fresh){
+    if (!Array.isArray(fresh.wfh)) fresh.wfh = [];
+    if (!Array.isArray(fresh.wfh_ranges)) fresh.wfh_ranges = [];
+    if (wfhKind==='date') {
+      var cur = fresh.wfh.find(function(d){return d.date===start});
+      if (cur) {
+        if (sameEntry(cur, wfhEntry, ['date','reason'])) return fresh;
+        throw new Error('date '+start+' already marked WFH by another writer');
+      }
+      fresh.wfh.push(cloneJson(wfhEntry));
+      fresh.wfh.sort(function(a,b){return a.date.localeCompare(b.date)});
+    } else {
+      var cur = fresh.wfh_ranges.find(function(item){return item.start===start && item.end===end});
+      if (cur) {
+        if (sameEntry(cur, wfhEntry, ['start','end','reason'])) return fresh;
+        throw new Error('WFH range '+start+' to '+end+' changed elsewhere');
+      }
+      fresh.wfh_ranges.push(cloneJson(wfhEntry));
+      fresh.wfh_ranges.sort(function(a,b){return a.start.localeCompare(b.start)});
+    }
+    return fresh;
+  });
+  if (!acceptWrite('blackout','blackout',r)) { await recoverWriteFailure([r], 'WFH'); return; }
+  localStorage.setItem(CACHE_KEY, JSON.stringify(S));
+  renderAll();
+  document.getElementById('wfh-date').value='';
+  document.getElementById('wfh-end-date').value='';
+  document.getElementById('wfh-reason').value='';
+  showToast('WFH added for '+start+(end!==start?' to '+end:''),'ok');
+}
+
+async function cancelWfh(date) {
+  if (!confirm('Cancel WFH for '+date+'?')) return;
+  S.blackout.wfh = (S.blackout.wfh||[]).filter(function(d){return d.date!==date});
+  showToast('Cancelling...','ok');
+  var r = await GH.writeFile('blackout.json', S.blackout, S.shas.blackout, 'Cancel WFH '+date+' (mobile)', function(fresh){
+    if (!Array.isArray(fresh.wfh)) fresh.wfh = [];
+    fresh.wfh = fresh.wfh.filter(function(d){return d.date!==date});
+    return fresh;
+  });
+  if (!acceptWrite('blackout','blackout',r)) { await recoverWriteFailure([r], 'WFH cancellation'); return; }
+  localStorage.setItem(CACHE_KEY, JSON.stringify(S));
+  renderAll();
+  showToast('WFH cancelled','ok');
+}
+
+async function cancelWfhRange(start, end) {
+  if (!confirm('Cancel WFH from '+start+' to '+end+'?')) return;
+  S.blackout.wfh_ranges = (S.blackout.wfh_ranges||[]).filter(function(r){return !(r.start===start && r.end===end)});
+  showToast('Cancelling...','ok');
+  var r = await GH.writeFile('blackout.json', S.blackout, S.shas.blackout, 'Cancel WFH range '+start+' to '+end+' (mobile)', function(fresh){
+    if (!Array.isArray(fresh.wfh_ranges)) fresh.wfh_ranges = [];
+    fresh.wfh_ranges = fresh.wfh_ranges.filter(function(item){return !(item.start===start && item.end===end)});
+    return fresh;
+  });
+  if (!acceptWrite('blackout','blackout',r)) { await recoverWriteFailure([r], 'WFH cancellation'); return; }
+  localStorage.setItem(CACHE_KEY, JSON.stringify(S));
+  renderAll();
+  showToast('WFH range cancelled','ok');
+}
+
+async function snoozeTomorrow() {
+  var topic = localStorage.getItem('ntfy_topic');
+  if (!topic) { showToast('Set your ntfy topic in Settings first','error'); return; }
+  var d = pkNow(); d.setDate(d.getDate()+1);
+  var dayName = ['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'][d.getDay()];
+  var dateStr = d.toISOString().slice(0,10);
+  showToast('Sending reminder...','ok');
+  try {
+    var resp = await fetch('https://ntfy.sh/'+encodeURIComponent(topic), {
+      method:'POST',
+      headers:{'Title':'Tomorrow Plan (Snoozed)','Tags':'calendar,alarm_clock','Delay':'2h'},
+      body:'Bot will run tomorrow ('+dayName+' '+dateStr+'). Tap to check.'
+    });
+    if (resp.ok) { showToast('Snooze set - reminder in 2h','ok'); }
+    else { showToast('Failed: HTTP '+resp.status,'error'); }
+  } catch(e) { showToast('Failed: '+e.message,'error'); }
+}
+
+function saveNtfyTopic() {
+  var topic = document.getElementById('set-ntfy-topic').value.trim();
+  if (!topic) { localStorage.removeItem('ntfy_topic'); showToast('Topic cleared','ok'); return; }
+  localStorage.setItem('ntfy_topic', topic);
+  showToast('Ntfy topic saved','ok');
 }
 
 async function addWorkingWeekend() {

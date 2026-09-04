@@ -963,6 +963,12 @@ def main():
     run_kind = "(MANUAL) " if now_flag else ("(FALLBACK) " if fallback_flag else "")
     log.info("=== %s Bot started %s===", label, run_kind)
 
+    try:
+        from cloud_sync import pull_from_cloud
+        pull_from_cloud()
+    except Exception as exc:
+        log.warning("Cloud pull skipped: %s", exc)
+
     done, done_time = already_done(mode)
     if done:
         today_fmt = pk_now().strftime("%d-%b-%Y")
