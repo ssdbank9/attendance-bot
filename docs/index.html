@@ -151,8 +151,8 @@ select.input{appearance:none;background-image:url("data:image/svg+xml,%3Csvg xml
       <div class="card-title">Quick Actions</div>
       <p style="font-size:.75rem;color:var(--text2);margin-bottom:.6rem">Runs for real on your desktop via the self-hosted GitHub Actions runner - works from anywhere, no VPN needed.</p>
       <div style="display:flex;gap:.5rem;margin-bottom:.5rem">
-        <button class="btn btn-primary" style="flex:1" onclick="triggerAction('timein')">Time In Now</button>
-        <button class="btn btn-outline" style="flex:1" onclick="triggerAction('timeout')">Time Out Now</button>
+        <button class="btn btn-primary" style="flex:1" onclick="triggerAction('timein')" id="btn-timein">Time In Now</button>
+        <button class="btn btn-outline" style="flex:1" onclick="triggerAction('timeout')" id="btn-timeout">Time Out Now</button>
       </div>
       <button class="btn full" id="pause-btn" onclick="togglePause()">Pause Bot</button>
       <button class="btn btn-outline full" style="margin-top:.5rem;border-color:#e67e22;color:#e67e22" onclick="snoozeTomorrow()">Snooze Tomorrow (2h)</button>
@@ -836,6 +836,14 @@ function renderStatus() {
   const toSub = toIsToday ? today+(to.action_origin==='preexisting'?' (pre-existing)':'') : (toCatchup ? to.date+' (catch-up)' : (tiIsToday?'Pending':''));
   el.innerHTML = '<div class="status-item"><div class="status-label">Time-In</div><div class="status-value">'+esc(tiTime)+'</div><div class="status-sub">'+esc(tiSub)+'</div></div>'
     +'<div class="status-item"><div class="status-label">Time-Out</div><div class="status-value">'+esc(toTime)+'</div><div class="status-sub">'+esc(toSub)+'</div></div>';
+
+  // Update button labels with today's date
+  var months = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+  var todayShort = months[pkNow().getMonth()]+' '+pkNow().getDate();
+  var bti = document.getElementById('btn-timein');
+  var bto = document.getElementById('btn-timeout');
+  if(bti) bti.textContent = 'Time In Now ('+todayShort+')';
+  if(bto) bto.textContent = 'Time Out Now ('+todayShort+')';
 
   const paused = (S.botConfig||{}).paused;
   const pauseBtn = document.getElementById('pause-btn');
