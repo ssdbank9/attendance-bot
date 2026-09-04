@@ -8,11 +8,11 @@
     "observed_time": "09:16:00"
   },
   "timeout": {
-    "date": "2026-09-03",
+    "date": "2026-09-04",
     "status": "success",
-    "message": "Time-Out marked at 09:21:47 (completed pending 03-Sep-2026)",
-    "timestamp": "2026-09-04 09:21:47",
-    "action_origin": "bot",
-    "action_time": "09:21:47"
+    "message": "Time-Out at 09:21 (portal record - catch-up from Sep 3 attributed to Sep 4 by portal)",
+    "timestamp": "2026-09-04 22:43:28",
+    "action_origin": "preexisting",
+    "observed_time": "09:21:00"
   }
 }
