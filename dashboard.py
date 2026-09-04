@@ -224,6 +224,52 @@ def _sync_notif_prefs_to_cloud():
         pass
 
 
+def next_due_date():
+    """Return (YYYY-MM-DD, short_label) for the next date attendance is due.
+
+    Walks forward from today skipping weekends (unless working weekend),
+    holidays, blackout dates/ranges, and WFH dates/ranges.
+    """
+    from datetime import timedelta
+    d = pk_now()
+    holidays = load_json(HOLIDAYS_FILE)
+    hol_dates = {h["date"] for h in holidays.get("holidays", []) if not h.get("disabled", False)}
+    blackout = load_json(BLACKOUT_FILE)
+    bl_dates = {b["date"] for b in blackout.get("dates", [])}
+    bl_ranges = blackout.get("ranges", [])
+    working_wkends = set(blackout.get("working_weekends", []))
+    wfh_dates = {w["date"] for w in blackout.get("wfh", [])}
+    wfh_ranges = blackout.get("wfh_ranges", [])
+    for _ in range(60):
+        ds = d.strftime("%Y-%m-%d")
+        skip = False
+        if d.weekday() >= 5 and ds not in working_wkends:
+            skip = True
+        elif ds in hol_dates:
+            skip = True
+        elif ds in bl_dates:
+            skip = True
+        else:
+            for r in bl_ranges:
+                if r["start"] <= ds <= r["end"]:
+                    skip = True
+                    break
+        if not skip:
+            if ds in wfh_dates:
+                skip = True
+            else:
+                for wr in wfh_ranges:
+                    if wr.get("start", "") <= ds <= wr.get("end", ""):
+                        skip = True
+                        break
+        if not skip:
+            short = d.strftime("%b ") + str(d.day)
+            return ds, short
+        d += timedelta(days=1)
+    d = pk_now()
+    return d.strftime("%Y-%m-%d"), d.strftime("%b ") + str(d.day)
+
+
 def get_next_workdays(n=5):
     days = []
     # Start at today, not tomorrow. Today belongs on this panel - the one day
@@ -1844,8 +1890,7 @@ def dashboard():
         toast_html = f'<div class="toast {cls}" id="toast">{html.escape(msg)}</div>'
     ti = status.get("timein", {})
     to = status.get("timeout", {})
-    today_dt = datetime.strptime(today, "%Y-%m-%d")
-    today_short = today_dt.strftime("%b ") + str(today_dt.day)
+    due_date, due_short = next_due_date()
     ti_done = ti.get("date") == today and ti.get("status") == "success"
     to_done = to.get("date") == today and to.get("status") == "success"
     notif_rows, admin_email = render_notif_prefs()
@@ -1908,7 +1953,7 @@ def dashboard():
         to_class="done" if to_done else "none",
         to_time=(to.get("action_time") or to.get("observed_time") or "-") if to_done else "-",
         to_meta=(today + (" (pre-existing)" if to.get("action_origin") == "preexisting" else "")) if to_done else ("Pending" if ti_done else ""),
-        today_short=today_short,
+        due_short=due_short, due_date=due_date,
         workdays_html=render_workdays(workdays), holidays_html=render_holidays(upcoming),
         blackout_html=render_blackouts(bl_dates, bl_ranges, wfh_dates, wfh_ranges),
         user_id=html.escape(str(config.get("credentials", {}).get("user_id", "?")), quote=True),
@@ -2042,8 +2087,8 @@ details.collapsible[open] > summary.collapsible-title::after {{transform:rotate(
       </div>{clock_row}</div>
     <div class="card"><div class="card-title">Today's Actions</div>
       <div class="quick-actions">
-        <a class="btn full" style="background:var(--ok)" href="/action/timein-now" onclick="return confirm('Run Time-In now for {today}?')">Time In Now ({today_short})</a>
-        <a class="btn full" style="background:var(--warn,#b8860b)" href="/action/timeout-now" onclick="return confirm('Run Time-Out now for {today}?')">Time Out Now ({today_short})</a>
+        <a class="btn full" style="background:var(--ok)" href="/action/timein-now" onclick="return confirm('Run Time-In now for {due_date}?')">Time In Now ({due_short})</a>
+        <a class="btn full" style="background:var(--warn,#b8860b)" href="/action/timeout-now" onclick="return confirm('Run Time-Out now for {due_date}?')">Time Out Now ({due_short})</a>
         <a class="btn full outline" data-no-ajax href="/action/sync-portal" onclick="return confirm('Check portal for today\'s attendance?')" style="margin-top:.5rem;font-size:.85rem">Sync from Portal</a>
       </div></div>
     {email_btn}

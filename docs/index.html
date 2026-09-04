@@ -821,6 +821,38 @@ function renderWorkingWeekends() {
   el.innerHTML = h;
 }
 
+function getNextDueLabel() {
+  var months = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+  var hols = new Set();
+  ((S.holidays||{}).holidays||[]).forEach(function(h){ if(!h.disabled) hols.add(h.date); });
+  var bl = S.blackout||{};
+  var blDates = new Set();
+  (bl.dates||[]).forEach(function(b){ blDates.add(b.date); });
+  var blRanges = bl.ranges||[];
+  var wkends = new Set(bl.working_weekends||[]);
+  var wfhDates = new Set();
+  (bl.wfh||[]).forEach(function(w){ wfhDates.add(w.date); });
+  var wfhRanges = bl.wfh_ranges||[];
+  var d = pkNow();
+  for (var i=0; i<60; i++) {
+    var ds = d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0');
+    var wd = d.getDay();
+    var skip = false;
+    if ((wd===0||wd===6) && !wkends.has(ds)) skip = true;
+    else if (hols.has(ds)) skip = true;
+    else if (blDates.has(ds)) skip = true;
+    else { for (var j=0; j<blRanges.length; j++) { if (blRanges[j].start<=ds && ds<=blRanges[j].end) { skip=true; break; } } }
+    if (!skip) {
+      if (wfhDates.has(ds)) skip = true;
+      else { for (var k=0; k<wfhRanges.length; k++) { if ((wfhRanges[k].start||'')<=ds && ds<=(wfhRanges[k].end||'')) { skip=true; break; } } }
+    }
+    if (!skip) return months[d.getMonth()]+' '+d.getDate();
+    d = new Date(d.getTime()+86400000);
+  }
+  var now = pkNow();
+  return months[now.getMonth()]+' '+now.getDate();
+}
+
 function renderStatus() {
   const el = document.getElementById('status-content');
   const st = S.status||{};
@@ -837,13 +869,12 @@ function renderStatus() {
   el.innerHTML = '<div class="status-item"><div class="status-label">Time-In</div><div class="status-value">'+esc(tiTime)+'</div><div class="status-sub">'+esc(tiSub)+'</div></div>'
     +'<div class="status-item"><div class="status-label">Time-Out</div><div class="status-value">'+esc(toTime)+'</div><div class="status-sub">'+esc(toSub)+'</div></div>';
 
-  // Update button labels with today's date
-  var months = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
-  var todayShort = months[pkNow().getMonth()]+' '+pkNow().getDate();
+  // Update button labels with next due date
+  var dueLabel = getNextDueLabel();
   var bti = document.getElementById('btn-timein');
   var bto = document.getElementById('btn-timeout');
-  if(bti) bti.textContent = 'Time In Now ('+todayShort+')';
-  if(bto) bto.textContent = 'Time Out Now ('+todayShort+')';
+  if(bti) bti.textContent = 'Time In Now ('+dueLabel+')';
+  if(bto) bto.textContent = 'Time Out Now ('+dueLabel+')';
 
   const paused = (S.botConfig||{}).paused;
   const pauseBtn = document.getElementById('pause-btn');
