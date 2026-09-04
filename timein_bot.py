@@ -698,8 +698,8 @@ def recheck_portal(mode):
 
     today = pk_now().strftime("%Y-%m-%d")
     latest = db.get_latest(mode, today)
-    if not latest or latest["status"] != "failed":
-        log.info("No failed record for %s today - skipping recheck (API would perform the action)", label)
+    if not latest or latest["status"] not in ("failed", "skipped"):
+        log.info("No failed/skipped record for %s today - skipping recheck (API would perform the action)", label)
         return False
 
     attempted_at = pk_now()
@@ -1064,6 +1064,30 @@ def main():
             log.info("=== %s ===", msg)
             write_status(mode, "skipped", msg)
             notify_window_missed(mode, cutoff)
+            # Schedule a portal recheck to detect manual attendance
+            try:
+                recheck_target = pk_now() + timedelta(minutes=30)
+                task_name = "TimeInBot_Recheck"
+                script = str(Path(__file__).resolve())
+                exe = gui_executable()
+                _tz = recheck_target.replace(tzinfo=PKT).strftime("%z")
+                tz_str = f"{_tz[:3]}:{_tz[3:]}"
+                ps = f"""$ErrorActionPreference = 'Stop'
+$a = New-ScheduledTaskAction -Execute '{exe}' -Argument '"{script}" recheck' -WorkingDirectory '{BASE_DIR}'
+$t = New-ScheduledTaskTrigger -Once -At ([datetimeoffset]'{recheck_target:%Y-%m-%dT%H:%M:%S}{tz_str}').LocalDateTime
+$t.EndBoundary = '{(recheck_target + timedelta(hours=1)):%Y-%m-%dT%H:%M:%S}{tz_str}'
+$s = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -StartWhenAvailable -ExecutionTimeLimit (New-TimeSpan -Minutes 10) -DeleteExpiredTaskAfter (New-TimeSpan -Minutes 5)
+$s.Hidden = $true
+Register-ScheduledTask -TaskName '{task_name}' -Action $a -Trigger $t -Settings $s -Force | Out-Null
+"""
+                subprocess.run(
+                    ["powershell", "-NoProfile", "-NonInteractive", "-Command", ps],
+                    capture_output=True, text=True, timeout=30,
+                    creationflags=NO_WINDOW,
+                )
+                log.info("Scheduled portal recheck at %s (after window skip)", recheck_target.strftime("%H:%M:%S"))
+            except Exception as e:
+                log.warning("Could not schedule recheck after skip: %s", e)
             return
 
     with keep_awake(f"marking {label}"):
