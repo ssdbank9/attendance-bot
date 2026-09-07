@@ -9,9 +9,10 @@
   },
   "timeout": {
     "date": "2026-09-07",
-    "status": "skipped",
-    "message": "WFH: Work from home",
-    "timestamp": "2026-09-07 20:00:35",
-    "action_origin": "bot"
+    "status": "success",
+    "message": "WFH Time-Out (record now)",
+    "timestamp": "2026-09-07 22:00:40",
+    "action_origin": "wfh",
+    "action_time": "22:00:40"
   }
 }
