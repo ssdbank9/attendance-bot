@@ -1,10 +1,11 @@
 {
   "timein": {
     "date": "2026-09-07",
-    "status": "skipped",
-    "message": "WFH: Work from home",
-    "timestamp": "2026-09-07 08:45:08",
-    "action_origin": "bot"
+    "status": "success",
+    "message": "WFH Time-In (record now)",
+    "timestamp": "2026-09-07 08:51:15",
+    "action_origin": "wfh",
+    "action_time": "08:51:15"
   },
   "timeout": {
     "date": "2026-09-06",
