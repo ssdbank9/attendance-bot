@@ -8,11 +8,10 @@
     "action_time": "08:46:48"
   },
   "timeout": {
-    "date": "2026-09-07",
-    "status": "success",
-    "message": "Time-Out marked at 22:02:25",
-    "timestamp": "2026-09-07 22:02:25",
-    "action_origin": "bot",
-    "action_time": "22:02:25"
+    "date": "2026-09-08",
+    "status": "skipped",
+    "message": "WFH: Work from home",
+    "timestamp": "2026-09-08 13:47:27",
+    "action_origin": "bot"
   }
 }
