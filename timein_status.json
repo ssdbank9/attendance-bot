@@ -1,10 +1,11 @@
 {
   "timein": {
     "date": "2026-09-09",
-    "status": "skipped",
-    "message": "WFH: Work from home",
-    "timestamp": "2026-09-09 00:49:10",
-    "action_origin": "bot"
+    "status": "success",
+    "message": "Time-In marked at 00:49:00 (completed by recheck)",
+    "timestamp": "2026-09-09 00:49:39",
+    "action_origin": "bot",
+    "action_time": "00:49:00"
   },
   "timeout": {
     "date": "2026-09-08",
