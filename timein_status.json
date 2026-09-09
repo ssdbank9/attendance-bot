@@ -2,17 +2,17 @@
   "timein": {
     "date": "2026-09-09",
     "status": "success",
-    "message": "Time-In marked at 00:49:00 (completed by recheck)",
-    "timestamp": "2026-09-09 00:49:39",
+    "message": "Time-In corrected to 08:56 (manual entry)",
+    "timestamp": "2026-09-10 03:04:35",
     "action_origin": "bot",
-    "action_time": "00:49:00"
+    "action_time": "08:56:00"
   },
   "timeout": {
     "date": "2026-09-09",
     "status": "success",
-    "message": "Time-Out corrected to 00:50 (next-day manual entry)",
-    "timestamp": "2026-09-10 00:50:00",
+    "message": "Time-Out corrected to 21:20 (manual entry)",
+    "timestamp": "2026-09-10 03:04:35",
     "action_origin": "bot",
-    "action_time": "00:50:00"
+    "action_time": "21:20:00"
   }
 }
