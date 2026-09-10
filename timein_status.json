@@ -9,9 +9,10 @@
   },
   "timeout": {
     "date": "2026-09-10",
-    "status": "skipped",
-    "message": "Cannot Time-Out: no Time-In recorded today 10-Sep-2026",
-    "timestamp": "2026-09-10 09:50:35",
-    "action_origin": "bot"
+    "status": "success",
+    "message": "Time-Out marked at 10:20:00 (completed by recheck)",
+    "timestamp": "2026-09-10 10:20:35",
+    "action_origin": "bot",
+    "action_time": "10:20:00"
   }
 }
