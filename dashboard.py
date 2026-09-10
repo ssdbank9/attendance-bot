@@ -224,6 +224,19 @@ def _sync_notif_prefs_to_cloud():
         pass
 
 
+def _is_wfh_date(date_str, blackout=None):
+    """Check if a date is marked as WFH."""
+    if blackout is None:
+        blackout = load_json(BLACKOUT_FILE)
+    for w in blackout.get("wfh", []):
+        if w["date"] == date_str:
+            return True
+    for r in blackout.get("wfh_ranges", []):
+        if r["start"] <= date_str <= r["end"]:
+            return True
+    return False
+
+
 def next_due_date():
     """Return (YYYY-MM-DD, short_label) for the next date attendance is due.
 
@@ -1436,14 +1449,15 @@ def api_action(action_path):
 @app.route("/action/timein-now")
 def action_timein_now():
     today = pk_now().strftime("%Y-%m-%d")
+    blackout = load_json(BLACKOUT_FILE)
+    if _is_wfh_date(today, blackout) and request.args.get("force_wfh") != "1":
+        return redirect(url_for("dashboard", msg="Today is WFH. Cancel WFH first, or press the button again to confirm."))
     status = load_json(STATUS_FILE)
     ti = status.get("timein", {})
     if ti.get("date") == today and ti.get("status") == "success":
         today_fmt = pk_now().strftime("%d-%b-%Y")
         recorded_time = ti.get("action_time") or ti.get("observed_time") or "?"
         return redirect(url_for("dashboard", msg=f"Time-In already posted today {today_fmt} at {recorded_time}"))
-    # A dangling prior-day Time-Out is no longer a hard block here -
-    # timein_bot.py auto-completes it before proceeding with today's Time-In.
     ok, msg, died_silently = _run_bot_now("timein")
     if died_silently:
         # The bot could not report for itself, so this page must.
@@ -1454,6 +1468,9 @@ def action_timein_now():
 @app.route("/action/timeout-now")
 def action_timeout_now():
     today = pk_now().strftime("%Y-%m-%d")
+    blackout = load_json(BLACKOUT_FILE)
+    if _is_wfh_date(today, blackout) and request.args.get("force_wfh") != "1":
+        return redirect(url_for("dashboard", msg="Today is WFH. Cancel WFH first, or press the button again to confirm."))
     status = load_json(STATUS_FILE)
     ti = status.get("timein", {})
     to = status.get("timeout", {})
@@ -1967,7 +1984,11 @@ def dashboard():
     lb = config.get("leave_balance", {})
     leave_balance_html = render_leave_balance(lb)
     is_paused = config.get('paused', False)
+    wfh_today = _is_wfh_date(today)
+    wfh_qs = "?force_wfh=1" if wfh_today else ""
+    wfh_confirm = "WARNING: Today is WFH. This marks REAL attendance on AKU portal.\n\n" if wfh_today else ""
     return DASHBOARD_HTML.format(
+        wfh_qs=wfh_qs, wfh_confirm=wfh_confirm,
         toast_html=toast_html, today=today, now=now,
         ti_class="done" if ti_done else "none",
         ti_time=history_rec["timein"][:5] if ti_from_history else ((ti.get("action_time") or ti.get("observed_time") or "-") if ti_done else "-"),
@@ -2110,8 +2131,8 @@ details.collapsible[open] > summary.collapsible-title::after {{transform:rotate(
       </div>{clock_row}</div>
     <div class="card"><div class="card-title">Today's Actions</div>
       <div class="quick-actions">
-        <a class="btn full" style="background:var(--ok)" href="/action/timein-now" onclick="return confirm('Run Time-In now for {due_date}?')">Time In Now ({due_short})</a>
-        <a class="btn full" style="background:var(--warn,#b8860b)" href="/action/timeout-now" onclick="return confirm('Run Time-Out now for {due_date}?')">Time Out Now ({due_short})</a>
+        <a class="btn full" style="background:var(--ok)" href="/action/timein-now{wfh_qs}" onclick="return confirm('{wfh_confirm}Run Time-In now for {due_date}?')">Time In Now ({due_short})</a>
+        <a class="btn full" style="background:var(--warn,#b8860b)" href="/action/timeout-now{wfh_qs}" onclick="return confirm('{wfh_confirm}Run Time-Out now for {due_date}?')">Time Out Now ({due_short})</a>
         <a class="btn full outline" data-no-ajax href="/action/sync-portal" onclick="return confirm('Check portal for today\'s attendance?')" style="margin-top:.5rem;font-size:.85rem">Sync from Portal</a>
       </div></div>
     {email_btn}

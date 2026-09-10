@@ -681,6 +681,7 @@ async function dispatchWorkflowAction(mode, inputs) {
 
 async function triggerAction(mode) {
   const label = mode==='timein' ? 'Time-In' : 'Time-Out';
+  if (isWfhToday() && !confirm('WARNING: Today is WFH. This marks REAL attendance on AKU portal.\n\nProceed with '+label+'?')) return;
   showToast('Dispatching '+label+'...', 'ok');
   try {
     const result = await dispatchWorkflowAction(mode);

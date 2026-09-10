@@ -727,15 +727,20 @@ def recheck_portal(mode):
 
     log.info("=== Portal recheck for %s ===", label)
 
+    today = pk_now().strftime("%Y-%m-%d")
+    wfh, wfh_reason = is_wfh(today)
+    if wfh:
+        log.info("Skipping recheck - WFH: %s", wfh_reason)
+        return False
+
     done, done_time = already_done(mode)
     if done:
         log.info("Already recorded as success at %s - nothing to recheck", done_time)
         return True
 
-    today = pk_now().strftime("%Y-%m-%d")
     latest = db.get_latest(mode, today)
-    if not latest or latest["status"] not in ("failed", "skipped"):
-        log.info("No failed/skipped record for %s today - skipping recheck (API would perform the action)", label)
+    if not latest or latest["status"] != "failed":
+        log.info("No failed record for %s today - skipping recheck (skipped records are intentional)", label)
         return False
 
     attempted_at = pk_now()
@@ -1079,7 +1084,11 @@ def main():
             # Not write_status here either - same reason as above.
             return
     else:
-        log.info("Manual trigger - running immediately")
+        wfh_now, wfh_now_reason = is_wfh(pk_now().strftime("%Y-%m-%d"))
+        if wfh_now:
+            log.warning("Manual trigger on WFH day (%s) - proceeding as requested", wfh_now_reason)
+        else:
+            log.info("Manual trigger - running immediately")
 
     if mode == "timein":
         pending_date = pending_prior_day_timein()

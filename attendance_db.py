@@ -264,8 +264,11 @@ def export_history_json():
         time_val = r["action_time"] or r["observed_time"]
         if time_val:
             records.setdefault(r["date"], {})[r["mode"]] = time_val
-            if r["mode"] == "timeout" and r["next_day"]:
-                records[r["date"]]["timeout_next_day"] = True
+            if r["mode"] == "timeout":
+                if r["next_day"]:
+                    records[r["date"]]["timeout_next_day"] = True
+                else:
+                    records[r["date"]].pop("timeout_next_day", None)
     _atomic_write_json(HISTORY_FILE, {"records": records})
 
 
