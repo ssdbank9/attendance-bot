@@ -1,11 +1,10 @@
 {
   "timein": {
-    "date": "2026-09-09",
-    "status": "success",
-    "message": "Time-In corrected to 08:56 (manual entry)",
-    "timestamp": "2026-09-10 03:04:35",
-    "action_origin": "bot",
-    "action_time": "08:56:00"
+    "date": "2026-09-10",
+    "status": "failed",
+    "message": "Time-In FAILED after 3 attempts",
+    "timestamp": "2026-09-10 08:50:37",
+    "action_origin": "bot"
   },
   "timeout": {
     "date": "2026-09-09",
