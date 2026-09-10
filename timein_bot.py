@@ -428,6 +428,7 @@ def classify_aku_message(message):
         return True, message
     known_error = (
         r"No\s+Time\s+In\s+information\s+exist",
+        r"You\s+have\s+not\s+Timed\s+out\s+for\s+your\s+previous\s+Time\s+In",
     )
     if any(re.search(p, message, re.IGNORECASE) for p in known_error):
         return False, message
