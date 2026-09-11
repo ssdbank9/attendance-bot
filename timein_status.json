@@ -1,11 +1,11 @@
 {
   "timein": {
-    "date": "2026-09-10",
+    "date": "2026-09-11",
     "status": "success",
-    "message": "Successfully Timed In: Thu, Sep 10, 2026 - 9:51 AM PST",
-    "timestamp": "2026-09-10 09:51:40",
+    "message": "Time-In marked at 08:49:11",
+    "timestamp": "2026-09-11 08:49:11",
     "action_origin": "bot",
-    "action_time": "09:51:00"
+    "action_time": "08:49:11"
   },
   "timeout": {
     "date": "2026-09-10",
