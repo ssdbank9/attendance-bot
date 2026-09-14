@@ -1,11 +1,11 @@
 {
   "timein": {
-    "date": "2026-09-14",
+    "date": "2026-09-15",
     "status": "success",
-    "message": "Time-In was already present before this bot acted (portal reported 09:40:00)",
-    "timestamp": "2026-09-14 11:53:32",
-    "action_origin": "preexisting",
-    "observed_time": "09:40:00"
+    "message": "Time-In marked at 00:38:25",
+    "timestamp": "2026-09-15 00:38:25",
+    "action_origin": "bot",
+    "action_time": "00:38:25"
   },
   "timeout": {
     "date": "2026-09-14",
