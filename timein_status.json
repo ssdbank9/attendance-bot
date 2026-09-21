@@ -1,9 +1,9 @@
 {
   "timein": {
-    "date": "2026-09-20",
+    "date": "2026-09-21",
     "status": "skipped",
-    "message": "Weekend (Sunday)",
-    "timestamp": "2026-09-20 08:45:06",
+    "message": "Time-In window closed at 09:20 - not marking at 10:21",
+    "timestamp": "2026-09-21 10:21:12",
     "action_origin": "bot"
   },
   "timeout": {
