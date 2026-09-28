@@ -8,10 +8,11 @@
     "observed_time": "08:49:00"
   },
   "timeout": {
-    "date": "2026-09-27",
-    "status": "skipped",
-    "message": "Weekend (Sunday)",
-    "timestamp": "2026-09-27 20:24:07",
-    "action_origin": "bot"
+    "date": "2026-09-28",
+    "status": "success",
+    "message": "Time-Out was already present before this bot acted (portal reported 08:52:00)",
+    "timestamp": "2026-09-28 21:48:56",
+    "action_origin": "preexisting",
+    "observed_time": "08:52:00"
   }
 }
