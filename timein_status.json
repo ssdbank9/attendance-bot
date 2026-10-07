@@ -8,11 +8,10 @@
     "action_time": "08:50:05"
   },
   "timeout": {
-    "date": "2026-10-06",
-    "status": "success",
-    "message": "Time-Out marked at 21:36:29",
-    "timestamp": "2026-10-06 21:36:29",
-    "action_origin": "bot",
-    "action_time": "21:36:29"
+    "date": "2026-10-07",
+    "status": "skipped",
+    "message": "Cannot Time-Out: no Time-In recorded today 07-Oct-2026",
+    "timestamp": "2026-10-07 18:28:23",
+    "action_origin": "bot"
   }
 }
