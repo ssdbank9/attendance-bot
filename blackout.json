@@ -1,5 +1,11 @@
 {
-  "dates": [],
+  "dates": [
+    {
+      "date": "2026-10-09",
+      "reason": "Phone skip",
+      "added": "2026-10-08 22:25"
+    }
+  ],
   "ranges": [],
   "working_weekends": [],
   "wfh": [
