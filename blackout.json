@@ -7,7 +7,9 @@
     }
   ],
   "ranges": [],
-  "working_weekends": [],
+  "working_weekends": [
+    "2026-10-10"
+  ],
   "wfh": [
     {
       "date": "2026-09-07",
