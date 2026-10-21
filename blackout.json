@@ -4,6 +4,13 @@
       "date": "2026-10-09",
       "reason": "Phone skip",
       "added": "2026-10-08 22:25"
+    },
+    {
+      "date": "2026-10-22",
+      "reason": "Other Leave",
+      "leave_type": "other",
+      "days": 1.0,
+      "added": "2026-10-21 10:42"
     }
   ],
   "ranges": [],
