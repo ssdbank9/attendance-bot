@@ -3,15 +3,14 @@
     "date": "2026-10-22",
     "status": "skipped",
     "message": "Blackout: Other Leave",
-    "timestamp": "2026-10-22 01:40:19",
+    "timestamp": "2026-10-22 08:45:05",
     "action_origin": "bot"
   },
   "timeout": {
-    "date": "2026-10-20",
-    "status": "success",
-    "message": "Time-Out marked at 21:35:39",
-    "timestamp": "2026-10-20 21:35:39",
-    "action_origin": "bot",
-    "action_time": "21:35:39"
+    "date": "2026-10-22",
+    "status": "skipped",
+    "message": "Blackout: Other Leave",
+    "timestamp": "2026-10-22 14:19:07",
+    "action_origin": "bot"
   }
 }
