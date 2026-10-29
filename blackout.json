@@ -11,6 +11,13 @@
       "leave_type": "other",
       "days": 1.0,
       "added": "2026-10-21 10:42"
+    },
+    {
+      "date": "2026-11-04",
+      "reason": "Casual Leave",
+      "leave_type": "casual",
+      "days": 1.0,
+      "added": "2026-10-29 19:16"
     }
   ],
   "ranges": [],
