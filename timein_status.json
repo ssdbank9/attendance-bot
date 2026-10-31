@@ -7,11 +7,10 @@
     "action_origin": "bot"
   },
   "timeout": {
-    "date": "2026-10-30",
-    "status": "success",
-    "message": "Time-Out marked at 21:33:54",
-    "timestamp": "2026-10-30 21:33:54",
-    "action_origin": "bot",
-    "action_time": "21:33:54"
+    "date": "2026-10-31",
+    "status": "skipped",
+    "message": "Weekend (Saturday)",
+    "timestamp": "2026-10-31 20:00:10",
+    "action_origin": "bot"
   }
 }
