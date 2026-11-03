@@ -30,6 +30,11 @@
       "date": "2026-09-09",
       "reason": "Work from home",
       "added": "2026-09-04 23:15"
+    },
+    {
+      "date": "2026-11-04",
+      "reason": "Work from home",
+      "added": "2026-11-03 09:05"
     }
   ],
   "wfh_ranges": []
