@@ -1,9 +1,9 @@
 {
   "timein": {
-    "date": "2026-11-05",
+    "date": "2026-11-06",
     "status": "skipped",
-    "message": "WFH: Work from home",
-    "timestamp": "2026-11-05 08:45:09",
+    "message": "Blackout: Casual Leave",
+    "timestamp": "2026-11-06 03:37:55",
     "action_origin": "bot"
   },
   "timeout": {
