@@ -7,10 +7,10 @@
     "action_origin": "bot"
   },
   "timeout": {
-    "date": "2026-11-05",
+    "date": "2026-11-06",
     "status": "skipped",
-    "message": "WFH: Work from home",
-    "timestamp": "2026-11-05 20:00:09",
+    "message": "Blackout: Casual Leave",
+    "timestamp": "2026-11-06 16:58:10",
     "action_origin": "bot"
   }
 }
