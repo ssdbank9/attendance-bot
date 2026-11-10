@@ -8,10 +8,11 @@
     "action_time": "09:11:05"
   },
   "timeout": {
-    "date": "2026-11-09",
-    "status": "skipped",
-    "message": "Holiday: Iqbal Day",
-    "timestamp": "2026-11-09 20:00:11",
-    "action_origin": "bot"
+    "date": "2026-11-10",
+    "status": "success",
+    "message": "Time-Out marked at 21:31:12",
+    "timestamp": "2026-11-10 21:31:12",
+    "action_origin": "bot",
+    "action_time": "21:31:12"
   }
 }
