@@ -1,10 +1,11 @@
 {
   "timein": {
-    "date": "2026-11-15",
-    "status": "skipped",
-    "message": "Weekend (Sunday)",
-    "timestamp": "2026-11-15 08:45:07",
-    "action_origin": "bot"
+    "date": "2026-11-16",
+    "status": "success",
+    "message": "Time-In marked at 09:32:00 (completed by recheck)",
+    "timestamp": "2026-11-16 09:32:20",
+    "action_origin": "bot",
+    "action_time": "09:32:00"
   },
   "timeout": {
     "date": "2026-11-15",
