@@ -1,17 +1,17 @@
 {
   "timein": {
-    "date": "2026-11-21",
-    "status": "skipped",
-    "message": "Weekend (Saturday)",
-    "timestamp": "2026-11-21 08:45:07",
-    "action_origin": "bot"
+    "date": "2026-11-23",
+    "status": "success",
+    "message": "Time-In marked at 08:48:58",
+    "timestamp": "2026-11-23 08:48:58",
+    "action_origin": "bot",
+    "action_time": "08:48:58"
   },
   "timeout": {
-    "date": "2026-11-20",
-    "status": "success",
-    "message": "Time-Out marked at 21:34:08",
-    "timestamp": "2026-11-20 21:34:08",
-    "action_origin": "bot",
-    "action_time": "21:34:08"
+    "date": "2026-11-23",
+    "status": "skipped",
+    "message": "Cannot Time-Out: no Time-In recorded today 23-Nov-2026",
+    "timestamp": "2026-11-23 07:35:29",
+    "action_origin": "bot"
   }
 }
