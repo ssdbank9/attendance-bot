@@ -1,11 +1,11 @@
 {
   "timein": {
-    "date": "2026-11-26",
+    "date": "2026-11-27",
     "status": "success",
-    "message": "Time-In marked at 08:50:55",
-    "timestamp": "2026-11-26 08:50:55",
+    "message": "Time-In marked at 08:48:45",
+    "timestamp": "2026-11-27 08:48:45",
     "action_origin": "bot",
-    "action_time": "08:50:55"
+    "action_time": "08:48:45"
   },
   "timeout": {
     "date": "2026-11-26",
